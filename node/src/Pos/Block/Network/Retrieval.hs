@@ -104,11 +104,6 @@ retrievalWorkerImpl SendActions {..} =
         delay (30 & sec)
         mainLoop
     --
-    handleBlockRetrieval nodeId BlockRetrievalTask{..} =
-        handleAll (handleBlockRetrievalE nodeId brtHeader) $
-        (if brtContinues then handleContinues else handleAlternative)
-            nodeId
-            brtHeader
     handleContinues nodeId header = processContHeader enqueueMsg nodeId header
     handleAlternative nodeId header = do
         mhrr <- mkHeadersRequest (headerHash header)
@@ -136,7 +131,7 @@ retrievalWorkerImpl SendActions {..} =
         -- continuation, then recovery was not ended.
         mkAny :: Maybe Bool -> Any
         mkAny = maybe (Any False) Any
-    handleBlockRetrievalE nodeId header e = do
+    handleHeadersRecoveryE nodeId header e = do
         -- REPORT:ERROR 'reportOrLogW' in block retrieval worker.
         reportOrLogW (sformat
             ("Error handling nodeId="%build%", header="%build%": ")
@@ -147,8 +142,10 @@ retrievalWorkerImpl SendActions {..} =
     handleHeadersRecovery nodeId rHeader = do
         logDebug "Block retrieval queue is empty and we're in recovery mode,\
                  \ so we will request more headers and blocks"
-        handleBlockRetrieval nodeId $
-            BlockRetrievalTask { brtHeader = rHeader, brtContinues = False }
+        handleAll (handleHeadersRecoveryE nodeId brtHeader) $
+            handleAlternative
+                nodeId
+                rHeader
     handleBlockRetrievalFromQueue nodeId task = do
         logDebug $ sformat
             ("Block retrieval queue task received, nodeId="%build%
