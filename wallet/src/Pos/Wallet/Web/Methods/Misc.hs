@@ -24,6 +24,7 @@ import           Universum
 import           Data.Aeson                   (encode)
 import           Data.Aeson.TH                (defaultOptions, deriveJSON)
 import qualified Data.Text.Buildable
+import           Formatting                   (build, sformat, (%))
 import           Pos.Aeson.ClientTypes        ()
 import           Pos.Core                     (SoftwareVersion (..))
 import           Pos.Update.Configuration     (curSoftwareVersion)
@@ -31,6 +32,7 @@ import           Pos.Util                     (maybeThrow)
 import           Servant.API.ContentTypes     (MimeRender (..), OctetStream)
 
 import           Pos.Aeson.Storage            ()
+import           Pos.Util.LogSafe             (logInfoUnsafeP)
 import           Pos.Wallet.KeyStorage        (deleteSecretKey, getSecretKeys)
 import           Pos.Wallet.WalletMode        (applyLastUpdate, connectedPeers,
                                                localChainDifficulty,
@@ -93,11 +95,15 @@ applyUpdate = removeNextUpdate >> applyLastUpdate
 ----------------------------------------------------------------------------
 
 syncProgress :: MonadWalletWebMode m => m SyncProgress
-syncProgress =
-    SyncProgress
-    <$> localChainDifficulty
-    <*> networkChainDifficulty
-    <*> connectedPeers
+syncProgress = do
+    _spLocalCD <- localChainDifficulty
+    _spNetworkCD <- networkChainDifficulty
+    _spPeers <- connectedPeers
+    -- servant already logs this, but only to secret logs
+    logInfoUnsafeP $
+        sformat ("Current sync progress: "%build%"/"%build)
+        _spLocalCD _spNetworkCD
+    return SyncProgress{..}
 
 ----------------------------------------------------------------------------
 -- Reset
