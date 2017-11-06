@@ -99,6 +99,9 @@ retrievalWorkerImpl keepAliveTimer SendActions {..} =
                     pure (handleBlockRetrievalFromQueue nodeId task)
                 (_, Just (nodeId, rHeader))  ->
                     pure (handleHeadersRecovery nodeId rHeader)
+        -- Restart the timer for sending keep-alive like packets to node(s)
+        -- we're subscribed to as when we keep receiving blocks from them it
+        -- means the connection is sound.
         startTimer keepAliveTimer
         thingToDoNext
         mainLoop
