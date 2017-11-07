@@ -1,4 +1,3 @@
-
 -- | Logic of local data processing in Update System.
 
 module Pos.Update.Logic.Local
@@ -39,9 +38,8 @@ import           Pos.Core                 (BlockVersionData (bvdMaxBlockSize),
 import           Pos.Crypto               (PublicKey, shortHashF)
 import           Pos.DB.Class             (MonadDBRead)
 import qualified Pos.DB.GState.Common     as DB
-import           Pos.KnownPeers           (MonadFormatPeers)
-import           Pos.Lrc.Context          (LrcContext)
-import           Pos.Reporting            (HasReportingContext)
+import           Pos.Lrc.Context          (HasLrcContext)
+import           Pos.Reporting            (MonadReporting)
 import           Pos.StateLock            (StateLock)
 import           Pos.Update.Configuration (HasUpdateConfiguration)
 import           Pos.Update.Context       (UpdateContext (..))
@@ -66,7 +64,7 @@ type USLocalLogicMode ctx m =
     , WithLogger m
     , MonadReader ctx m
     , HasLens UpdateContext ctx UpdateContext
-    , HasLens LrcContext ctx LrcContext
+    , HasLrcContext ctx
     , HasConfiguration
     , HasUpdateConfiguration
     )
@@ -124,8 +122,7 @@ modifyMemState action = do
 
 processSkeleton ::
        ( USLocalLogicModeWithLock ctx m
-       , MonadFormatPeers m
-       , HasReportingContext ctx
+       , MonadReporting ctx m
        )
     => UpdatePayload
     -> m (Either PollVerFailure ())
@@ -166,7 +163,7 @@ refreshMemPool
        , MonadIO m
        , MonadReader ctx m
        , HasLens UpdateContext ctx UpdateContext
-       , HasLens LrcContext ctx LrcContext
+       , HasLrcContext ctx
        , WithLogger m
        , HasConfiguration
        , HasUpdateConfiguration
@@ -215,8 +212,7 @@ getLocalProposalNVotes id = do
 -- sender could be sure that error would happen.
 processProposal
     :: ( USLocalLogicModeWithLock ctx m
-       , MonadFormatPeers m
-       , HasReportingContext ctx
+       , MonadReporting ctx m
        )
     => UpdateProposal -> m (Either PollVerFailure ())
 processProposal proposal = processSkeleton $ UpdatePayload (Just proposal) []
@@ -267,8 +263,7 @@ getLocalVote propId pk decision = do
 -- sender could be sure that error would happen.
 processVote
     :: ( USLocalLogicModeWithLock ctx m
-       , MonadFormatPeers m
-       , HasReportingContext ctx
+       , MonadReporting ctx m
        )
     => UpdateVote -> m (Either PollVerFailure ())
 processVote vote = processSkeleton $ UpdatePayload Nothing [vote]

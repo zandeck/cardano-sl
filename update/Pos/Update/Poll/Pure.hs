@@ -17,7 +17,7 @@ import           System.Wlog               (CanLog, HasLoggerName (..), LogEvent
                                             runNamedPureLog)
 
 import           Pos.Binary.Class          (Bi)
-import           Pos.Core                  (SoftwareVersion (..), HasConfiguration)
+import           Pos.Core                  (HasConfiguration, SoftwareVersion (..))
 import           Pos.Crypto                (hash)
 import           Pos.Update.Core           (UpdateProposal (..), applyBVM)
 import           Pos.Update.Poll.Class     (MonadPoll (..), MonadPollRead (..))
@@ -29,12 +29,13 @@ import           Pos.Update.Poll.Types     (BlockVersionState (..),
                                             psProposal)
 
 newtype PurePoll a = PurePoll
-    { getPurePoll :: NamedPureLogger (State Poll.PollState) a
-    } deriving (Functor, Applicative, Monad, CanLog, HasLoggerName)
+    { getPurePoll :: StateT Poll.PollState (NamedPureLogger Identity) a
+    } deriving (Functor, Applicative, Monad, CanLog, HasLoggerName, MonadState Poll.PollState)
 
 runPurePollWithLogger :: Poll.PollState -> PurePoll a -> (a, Poll.PollState, [LogEvent])
-runPurePollWithLogger ps =
-    (\((a, c), b) -> (a, b, c)) . flip runState ps . runNamedPureLog . getPurePoll
+runPurePollWithLogger ps pp =
+    let innerMonad = usingStateT ps . getPurePoll $ pp
+    in  (\((a, finalState), logs) -> (a, finalState, logs)) . runIdentity . runNamedPureLog $ innerMonad
 
 evalPurePollWithLogger :: Poll.PollState -> PurePoll a -> a
 evalPurePollWithLogger r = view _1 . runPurePollWithLogger r
@@ -108,8 +109,9 @@ instance (HasConfiguration, Bi UpdateProposal) => MonadPoll PurePoll where
         PurePoll $ Poll.psConfirmedProposals . at (cpsSoftwareVersion cps) .= Just cps
     delConfirmedProposal sv = PurePoll $ Poll.psConfirmedProposals . at sv .= Nothing
     insertActiveProposal p =
-        PurePoll $ (Poll.psActiveProposals %= decideProp) >>
-                   (Poll.psActivePropsIdx %= addUIdtoApp)
+        PurePoll $ do
+            Poll.psActiveProposals %= decideProp
+            Poll.psActivePropsIdx %= addUIdtoApp
       where
           decideProp = HM.insert uId p
           addUIdtoApp = HM.insertWith HS.union appName (HS.singleton uId)

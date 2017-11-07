@@ -1,5 +1,5 @@
 name:                cardano-sl-explorer
-version:             1.0.1
+version:             1.0.3
 synopsis:            Cardano explorer
 description:         Please see README.md
 license:             MIT
@@ -13,10 +13,14 @@ extra-source-files:  README.md
 cabal-version:       >=1.10
 
 library
-  exposed-modules:      Pos.Explorer.Socket
+  exposed-modules:      Pos.Explorer.Core
+                        Pos.Explorer.DB
+                        Pos.Explorer.ExtraContext
+                        Pos.Explorer.Socket
                         Pos.Explorer.Socket.App
                         Pos.Explorer.Socket.Methods
                         Pos.Explorer.Socket.Util
+                        Pos.Explorer.Txp
                         Pos.Explorer.Web
                         Pos.Explorer.Web.Api
                         Pos.Explorer.Web.ClientTypes
@@ -24,25 +28,43 @@ library
                         Pos.Explorer.Web.TestServer
                         Pos.Explorer.Web.Server
 
+                        -- Needed for testing
+                        Pos.Arbitrary.Explorer
+
   other-modules:        Pos.Explorer.Aeson.ClientTypes
-
                         Pos.Explorer.Socket.Holder
-
                         Pos.Explorer.Web.Transform
-  build-depends:        aeson
+
+                        Pos.Binary.Explorer
+                        Pos.Explorer.Core.Types
+                        Pos.Explorer.Txp.Global
+                        Pos.Explorer.Txp.Local
+                        Pos.Explorer.Txp.Toil
+                        Pos.Explorer.Txp.Toil.Class
+                        Pos.Explorer.Txp.Toil.Logic
+                        Pos.Explorer.Txp.Toil.Types
+                        Pos.Explorer.BListener
+
+  build-depends:        QuickCheck
+                      , aeson
                       , base
                       , base16-bytestring
                       , binary
                       , bytestring
                       , containers
+                      , conduit
+                      , data-default
                       , either
                       , ether >= 0.5.1
                       , exceptions
                       , formatting
+                      , generic-arbitrary
                       , lens
                       , log-warper
                       , memory
                       , node-sketch
+                      , rocksdb-haskell
+                      , resourcet
                       , serokell-util
                       , stm
                       , tagged
@@ -53,12 +75,13 @@ library
                       , transformers
                       , universum
                       , unordered-containers
+                      , vector
 
                       -- cardano sl
                       , cardano-sl
                       , cardano-sl-core
-                      , cardano-sl-godtossing
                       , cardano-sl-infra
+                      , cardano-sl-txp
                       , cardano-sl-db
                       , cardano-sl-ssc
                       , cardano-sl-update
@@ -79,6 +102,7 @@ library
                       , engine-io
                       , engine-io-wai
                       , wai
+                      , wai-extra
                       , wai-cors
                       , warp
   hs-source-dirs:       src
@@ -99,11 +123,15 @@ library
                         NoImplicitPrelude
                         OverloadedStrings
                         RecordWildCards
+                        TemplateHaskell
                         TypeApplications
                         TupleSections
                         ViewPatterns
                         LambdaCase
                         MultiWayIf
+                        ConstraintKinds
+                        UndecidableInstances
+                        ScopedTypeVariables
 
   build-tools: cpphs >= 1.19
   ghc-options: -pgmP cpphs -optP --cpp
@@ -125,7 +153,6 @@ executable cardano-explorer
                      , cardano-sl-core
                      , cardano-sl-infra
                      , cardano-sl-explorer
-                     , cardano-sl-godtossing
                      , cardano-sl-ssc
                      , cardano-sl-update
                      , containers
@@ -225,6 +252,7 @@ executable cardano-explorer-swagger
   build-depends:       aeson
                      , base
                      , bytestring
+                     , cardano-sl
                      , cardano-sl-explorer
                      , lens
                      , swagger2
@@ -310,6 +338,8 @@ test-suite cardano-explorer-test
                        Test.Pos.Explorer.Web.ServerSpec
                        Test.Pos.Explorer.Web.ClientTypesSpec
 
+                       Test.Pos.Explorer.Identity.BinarySpec
+
   type:                exitcode-stdio-1.0
   build-depends:       MonadRandom
                      , QuickCheck
@@ -317,6 +347,7 @@ test-suite cardano-explorer-test
                      , bytestring
                      , cardano-sl-explorer
                      , cardano-sl-core
+                     , cardano-sl-txp
                      , cardano-sl
                      , cborg
                      , cereal

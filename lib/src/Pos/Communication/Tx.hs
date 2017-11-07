@@ -38,10 +38,10 @@ import           Pos.Txp.Network.Types      (TxMsgContents (..))
 import           Pos.Util.Util              (eitherToThrow)
 import           Pos.WorkMode.Class         (MinWorkMode)
 
-type TxMode ssc m
+type TxMode m
     = ( MinWorkMode m
       , MonadBalances m
-      , MonadTxHistory ssc m
+      , MonadTxHistory m
       , MonadMockable m
       , MonadMask m
       , MonadThrow m
@@ -49,43 +49,29 @@ type TxMode ssc m
       )
 
 submitAndSave
-    :: TxMode ssc m
+    :: TxMode m
     => EnqueueMsg m -> TxAux -> m Bool
 submitAndSave enqueue txAux@TxAux {..} = do
     let txId = hash taTx
     accepted <- submitTxRaw enqueue txAux
     saveTx (txId, txAux)
-    return accepted
+    pure accepted
 
 -- | Construct Tx using multiple secret keys and given list of desired outputs.
 prepareMTx
-    :: TxMode ssc m
-    => NonEmpty (SafeSigner, Address)
+    :: TxMode m
+    => (Address -> SafeSigner)
+    -> NonEmpty Address
     -> NonEmpty TxOutAux
     -> AddrData m
     -> m (TxAux, NonEmpty TxOut)
-prepareMTx hdwSigner outputs addrData = do
-    let addrs = map snd $ toList hdwSigner
-    utxo <- getOwnUtxos addrs
-    eitherToThrow =<< createMTx utxo hdwSigner outputs addrData
-
--- | Construct Tx using secret key and given list of desired outputs
-submitTx
-    :: TxMode ssc m
-    => EnqueueMsg m
-    -> SafeSigner
-    -> NonEmpty TxOutAux
-    -> AddrData m
-    -> m (TxAux, NonEmpty TxOut)
-submitTx enqueue ss outputs addrData = do
-    let ourPk = safeToPublic ss
-    utxo <- getOwnUtxoForPk ourPk
-    txWSpendings <- eitherToThrow =<< createTx utxo ss outputs addrData
-    txWSpendings <$ submitAndSave enqueue (fst txWSpendings)
+prepareMTx hdwSigners addrs outputs addrData = do
+    utxo <- getOwnUtxos (toList addrs)
+    eitherToThrow =<< createMTx utxo hdwSigners outputs addrData
 
 -- | Construct redemption Tx using redemption secret key and a output address
 prepareRedemptionTx
-    :: TxMode ssc m
+    :: TxMode m
     => RedeemSecretKey
     -> Address
     -> m (TxAux, Address, Coin)
@@ -112,3 +98,18 @@ submitTxRaw enqueue txAux@TxAux {..} = do
 
 sendTxOuts :: OutSpecs
 sendTxOuts = createOutSpecs (Proxy :: Proxy (InvOrDataTK TxId TxMsgContents))
+
+-- | Construct Tx using secret key and given list of desired outputs
+-- BE CAREFUL! Doesn't consider HD wallet addresses
+submitTx
+    :: TxMode m
+    => EnqueueMsg m
+    -> SafeSigner
+    -> NonEmpty TxOutAux
+    -> AddrData m
+    -> m (TxAux, NonEmpty TxOut)
+submitTx enqueue ss outputs addrData = do
+    let ourPk = safeToPublic ss
+    utxo <- getOwnUtxoForPk ourPk
+    txWSpendings <- eitherToThrow =<< createTx utxo ss outputs addrData
+    txWSpendings <$ submitAndSave enqueue (fst txWSpendings)

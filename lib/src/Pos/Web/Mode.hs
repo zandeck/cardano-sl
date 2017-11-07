@@ -8,55 +8,57 @@ module Pos.Web.Mode
 
 import           Universum
 
-import           Control.Lens         (makeLensesWith)
-import qualified Control.Monad.Reader as Mtl
-import           Ether.Internal       (HasLens (..))
-import           Mockable             (Production)
+import           Control.Lens           (makeLensesWith)
+import qualified Control.Monad.Reader   as Mtl
+import           Ether.Internal         (HasLens (..))
+import           Mockable               (Production)
 
-import           Pos.Context          (HasPrimaryKey (..), HasSscContext (..),
-                                       NodeContext)
+import           Pos.Context            (HasPrimaryKey (..), HasSscContext (..),
+                                         NodeContext)
 import           Pos.Core.Configuration (HasConfiguration)
-import           Pos.DB               (NodeDBs)
-import           Pos.DB.Class         (MonadDB (..), MonadDBRead (..))
-import           Pos.DB.Rocks         (dbDeleteDefault, dbGetDefault, dbIterSourceDefault,
-                                       dbPutDefault, dbWriteBatchDefault)
-import           Pos.Txp.MemState     (GenericTxpLocalData, TxpHolderTag)
-import           Pos.Util.Util        (postfixLFields)
-import           Pos.WorkMode         (TxpExtra_TMP)
+import           Pos.DB                 (NodeDBs)
+import           Pos.DB.Class           (MonadDB (..), MonadDBRead (..))
+import           Pos.DB.Rocks           (dbDeleteDefault, dbGetDefault,
+                                         dbIterSourceDefault, dbPutDefault,
+                                         dbWriteBatchDefault)
+import           Pos.Txp                (GenericTxpLocalData, MempoolExt, TxpHolderTag)
+import           Pos.Util.Util          (postfixLFields)
 
-data WebModeContext ssc = WebModeContext
+data WebModeContext ext = WebModeContext
     { wmcNodeDBs      :: !NodeDBs
-    , wmcTxpLocalData :: !(GenericTxpLocalData TxpExtra_TMP)
-    , wmcNodeContext  :: !(NodeContext ssc)
+    , wmcTxpLocalData :: !(GenericTxpLocalData ext)
+    , wmcNodeContext  :: !NodeContext
     }
 
 makeLensesWith postfixLFields ''WebModeContext
 
-instance HasLens NodeDBs (WebModeContext ssc) NodeDBs where
+instance HasLens NodeDBs (WebModeContext ext) NodeDBs where
     lensOf = wmcNodeDBs_L
 
-instance HasLens TxpHolderTag (WebModeContext ssc) (GenericTxpLocalData TxpExtra_TMP) where
+instance HasLens TxpHolderTag (WebModeContext ext) (GenericTxpLocalData ext) where
     lensOf = wmcTxpLocalData_L
 
 instance {-# OVERLAPPABLE #-}
-    HasLens tag (NodeContext ssc) r =>
-    HasLens tag (WebModeContext ssc) r
+    HasLens tag NodeContext r =>
+    HasLens tag (WebModeContext ext) r
   where
     lensOf = wmcNodeContext_L . lensOf @tag
 
-instance HasSscContext ssc (WebModeContext ssc) where
+instance HasSscContext (WebModeContext ext) where
     sscContext = wmcNodeContext_L . sscContext
 
-instance HasPrimaryKey (WebModeContext ssc) where
+instance HasPrimaryKey (WebModeContext ext) where
     primaryKey = wmcNodeContext_L . primaryKey
 
-type WebMode ssc = Mtl.ReaderT (WebModeContext ssc) Production
+type WebMode ext = Mtl.ReaderT (WebModeContext ext) Production
 
-instance HasConfiguration => MonadDBRead (WebMode ssc) where
+instance HasConfiguration => MonadDBRead (WebMode ext) where
     dbGet = dbGetDefault
     dbIterSource = dbIterSourceDefault
 
-instance HasConfiguration => MonadDB (WebMode ssc) where
+instance HasConfiguration => MonadDB (WebMode ext) where
     dbPut = dbPutDefault
     dbWriteBatch = dbWriteBatchDefault
     dbDelete = dbDeleteDefault
+
+type instance MempoolExt (WebMode ext) = ext

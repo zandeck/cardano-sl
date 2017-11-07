@@ -21,7 +21,7 @@ import           Formatting                 (build, builder, int, sformat, stext
 import           Mockable                   (delay, handleAll)
 import           Serokell.Data.Memory.Units (unitBuilder)
 import           Serokell.Util              (listJson, sec)
-import           System.Wlog                (logDebug, logInfo, logWarning)
+import           System.Wlog                (logDebug, logError, logInfo, logWarning)
 
 import           Pos.Binary.Class           (biSize)
 import           Pos.Binary.Communication   ()
@@ -45,21 +45,21 @@ import           Pos.Core                   (HasHeaderHash (..), HeaderHash, dif
                                              isMoreDifficult, prevBlockL)
 import           Pos.Crypto                 (shortHashF)
 import           Pos.Reporting              (reportOrLogE, reportOrLogW)
-import           Pos.Ssc.Class              (SscWorkersClass)
 import           Pos.Util                   (_neHead, _neLast)
 import           Pos.Util.Chrono            (NE, NewestFirst (..), OldestFirst (..),
                                              _NewestFirst, _OldestFirst)
+import           Pos.Util.Timer             (Timer, startTimer)
 import           Pos.WorkMode.Class         (WorkMode)
 
 retrievalWorker
-    :: forall ssc ctx m.
-       (SscWorkersClass ssc, WorkMode ssc ctx m)
-    => (WorkerSpec m, OutSpecs)
-retrievalWorker = worker outs retrievalWorkerImpl
+    :: forall ctx m.
+       (WorkMode ctx m)
+    => Timer -> (WorkerSpec m, OutSpecs)
+retrievalWorker keepAliveTimer = worker outs (retrievalWorkerImpl keepAliveTimer)
   where
     outs = announceBlockOuts <>
            toOutSpecs [convH (Proxy :: Proxy MsgGetBlocks)
-                             (Proxy :: Proxy (MsgBlock ssc))
+                             (Proxy :: Proxy MsgBlock)
                       ]
 
 -- I really don't like join
@@ -76,10 +76,10 @@ retrievalWorker = worker outs retrievalWorkerImpl
 -- If both happen at the same time, 'BlockRetrievalQueue' takes precedence.
 --
 retrievalWorkerImpl
-    :: forall ssc ctx m.
-       (SscWorkersClass ssc, WorkMode ssc ctx m)
-    => SendActions m -> m ()
-retrievalWorkerImpl SendActions {..} =
+    :: forall ctx m.
+       (WorkMode ctx m)
+    => Timer -> SendActions m -> m ()
+retrievalWorkerImpl keepAliveTimer SendActions {..} =
     handleAll mainLoopE $ do
         logDebug "Starting retrievalWorker loop"
         mainLoop
@@ -88,84 +88,112 @@ retrievalWorkerImpl SendActions {..} =
         queue        <- view (lensOf @BlockRetrievalQueueTag)
         recHeaderVar <- view (lensOf @RecoveryHeaderTag)
         logDebug "Waiting on the block queue or recovery header var"
+        -- Reading the queue is a priority, because it sets recovery
+        -- variable in case header is alternative. So if the queue
+        -- contains lots of headers after a long delay, we'll first
+        -- iterate over them and set recovery variable to a latest
+        -- one, and only then we'll do recovery.
         thingToDoNext <- atomically $ do
             mbQueuedHeadersChunk <- tryReadTBQueue queue
             mbRecHeader <- tryReadTMVar recHeaderVar
             case (mbQueuedHeadersChunk, mbRecHeader) of
                 (Nothing, Nothing) -> retry
+                -- Dispatch task.
                 (Just (nodeId, task), _) ->
-                    pure (handleBlockRetrievalFromQueue nodeId task)
+                    pure (handleBlockRetrieval nodeId task)
+                -- No tasks & recovery header is there ⇒ do recovery.
                 (_, Just (nodeId, rHeader))  ->
-                    pure (handleHeadersRecovery nodeId rHeader)
+                    pure (handleRecoveryWithHandler nodeId rHeader)
+        startTimer keepAliveTimer
         thingToDoNext
         mainLoop
     mainLoopE e = do
         -- REPORT:ERROR 'reportOrLogE' in block retrieval worker.
-        reportOrLogE "retrievalWorker: error caught " e
-        delay (30 & sec)
+        reportOrLogE "retrievalWorker mainLoopE: error caught " e
+        delay $ sec 1
         mainLoop
 
-    -- 2 types of task performed by recovery worker
+    -----------------
 
-    handleHeadersRecovery nodeId rHeader = do
-        logDebug "Block retrieval queue is empty and we're in recovery mode,\
-                 \ so we will request more headers and blocks"
-        handleBlockRetrieval nodeId $
-            BlockRetrievalTask { brtHeader = rHeader, brtContinues = False }
-    handleBlockRetrievalFromQueue nodeId task = do
+    -- That's the first queue branch (task dispatching).
+    handleBlockRetrieval nodeId BlockRetrievalTask{..} = do
         logDebug $ sformat
             ("Block retrieval queue task received, nodeId="%build%
              ", header="%build%", continues="%build)
             nodeId
-            (headerHash $ brtHeader task)
-            (brtContinues task)
-        handleBlockRetrieval nodeId task
-
-    -- Tasks dispatcher (with handler)
-
-    handleBlockRetrieval nodeId BlockRetrievalTask{..} =
-        handleAll (handleBlockRetrievalE nodeId brtHeader) $
+            (headerHash brtHeader)
+            brtContinues
         (if brtContinues then handleContinues else handleAlternative)
             nodeId
             brtHeader
-    handleBlockRetrievalE nodeId header e = do
-        -- REPORT:ERROR 'reportOrLogW' in block retrieval worker.
-        reportOrLogW (sformat
-            ("Error handling nodeId="%build%", header="%build%": ")
-            nodeId (headerHash header)) e
-        dropUpdateHeader
-        dropRecoveryHeaderAndRepeat enqueueMsg nodeId
 
-    -- task dispatcher continuation
-
+    -- When we have continuation, we just try to get and apply it.
     handleContinues nodeId header = do
-        classificationRes <- classifyNewHeader header
-        case classificationRes of
+        logDebug $ "handleContinues: " <> pretty header
+        classifyNewHeader header >>= \case
             CHContinues ->
                 void $ getProcessBlocks enqueueMsg nodeId header (headerHash header)
             res -> logDebug $
                 "processContHeader: expected header to " <>
-                 "be continuation, but it's " <> show res
-    handleAlternative nodeId header = mkHeadersRequest (headerHash header) >>= \case
-        MhrrBlockAdopted ->
-            logDebug "Block already adopted, nothing to be done"
-        MhrrWithCheckpoints mgh -> do
-            logDebug "Checkpoints available, headers request assembled"
+                "be continuation, but it's " <> show res
 
-            updateRecoveryHeader nodeId header
-            let cont (headers :: NewestFirst NE (BlockHeader ssc)) =
-                    let oldestHeader = headers ^. _NewestFirst . _neLast
-                        newestHeader = headers ^. _NewestFirst . _neHead
-                    in getProcessBlocks enqueueMsg
-                                        nodeId
-                                        oldestHeader
-                                        (headerHash newestHeader)
-            -- If it returns w/o exception then we're:
-            --  * Either still in recovery mode
-            --  * Or just exited it and recoverVar was taken.
-            enqueueMsgSingle enqueueMsg (MsgRequestBlockHeaders $ Just $ S.singleton nodeId) $
-                Conversation $ requestHeaders cont mgh nodeId
-            logInfo "Recovery mode exited gracefully"
+    -- When we have alternative header, we should check whether it's
+    -- really recovery mode (server side should send us headers as a
+    -- proof) and then enter recovery mode.
+    handleAlternative nodeId header = do
+        logDebug $ "handleAlternative: " <> pretty header
+        classifyNewHeader header >>= \case
+            CHInvalid _ ->
+                logError "handleAlternative: invalid header got into retrievalWorker queue"
+            CHUseless _ ->
+                logDebug $
+                sformat ("handleAlternative: header "%build%" became useless, ignoring it")
+                        header
+            _ -> do
+                logDebug "handleAlternative: considering header for recovery mode"
+                -- CSL-1514
+                updateRecoveryHeader nodeId header
+
+    -----------------
+
+    handleRecoveryWithHandler nodeId header =
+        handleAll (handleRecoveryE nodeId header) $
+        handleRecovery nodeId header
+
+    -- We immediately drop recovery mode/header and request tips
+    -- again.
+    handleRecoveryE nodeId header e = do
+        -- REPORT:ERROR 'reportOrLogW' in block retrieval worker/recovery.
+        reportOrLogW (sformat
+            ("handleRecoveryE: error handling nodeId="%build%", header="%build%": ")
+            nodeId (headerHash header)) e
+        dropUpdateHeader
+        dropRecoveryHeaderAndRepeat enqueueMsg nodeId
+
+    -- Recovery handling. We assume that header in recovery var makes
+    -- sense and just query headers/blocks.
+    handleRecovery nodeId header = do
+        logDebug "Block retrieval queue is empty and we're in recovery mode,\
+                 \ so we will request more headers and blocks"
+        mkHeadersRequest (headerHash header) >>= \case
+            MhrrBlockAdopted ->
+                -- How did we even got into recovery then?
+                throwM $ DialogUnexpected "handleRecovery: got MhrrBlockAdopted"
+            MhrrWithCheckpoints mgh -> do
+                logDebug "handleRecovery: asking for headers"
+                let cont (headers :: NewestFirst NE BlockHeader) =
+                        let oldestHeader = headers ^. _NewestFirst . _neLast
+                            newestHeader = headers ^. _NewestFirst . _neHead
+                        in getProcessBlocks enqueueMsg nodeId
+                                            oldestHeader (headerHash newestHeader)
+                -- If it returns w/o exception then we're:
+                --  * Either still in recovery mode
+                --  * Or just exited it and recoverVar was taken.
+                enqueueMsgSingle
+                    enqueueMsg
+                    (MsgRequestBlockHeaders $ Just $ S.singleton nodeId)
+                    (Conversation $ requestHeaders cont mgh nodeId)
+
 
 ----------------------------------------------------------------------------
 -- Entering and exiting recovery mode
@@ -173,12 +201,12 @@ retrievalWorkerImpl SendActions {..} =
 
 -- | Result of attempt to update recovery header.
 data UpdateRecoveryResult ssc
-    = RecoveryStarted NodeId (BlockHeader ssc)
+    = RecoveryStarted NodeId BlockHeader
       -- ^ Recovery header was absent, so we've set it.
-    | RecoveryShifted NodeId (BlockHeader ssc) NodeId (BlockHeader ssc)
+    | RecoveryShifted NodeId BlockHeader NodeId BlockHeader
       -- ^ Header was present, but we've replaced it with another
       -- (more difficult) one.
-    | RecoveryContinued NodeId (BlockHeader ssc)
+    | RecoveryContinued NodeId BlockHeader
       -- ^ Header is good, but is irrelevant, so recovery variable is
       -- unchanged.
 
@@ -187,9 +215,9 @@ data UpdateRecoveryResult ssc
 -- condition can occur where we are caught in the recovery mode
 -- indefinitely.
 updateRecoveryHeader
-    :: WorkMode ssc ctx m
+    :: WorkMode ctx m
     => NodeId
-    -> BlockHeader ssc
+    -> BlockHeader
     -> m ()
 updateRecoveryHeader nodeId hdr = do
     recHeaderVar <- view (lensOf @RecoveryHeaderTag)
@@ -221,7 +249,7 @@ updateRecoveryHeader nodeId hdr = do
             rNodeId
             (headerHash rHeader)
 
-dropUpdateHeader :: WorkMode ssc ctx m => m ()
+dropUpdateHeader :: WorkMode ctx m => m ()
 dropUpdateHeader = do
     progressHeaderVar <- view (lensOf @ProgressHeaderTag)
     void $ atomically $ tryTakeTMVar progressHeaderVar
@@ -236,7 +264,7 @@ dropUpdateHeader = do
 -- to continue working with P2 and ignore the exception that happened with P.
 -- So, @nodeId@ is used to check that the peer wasn't replaced mid-execution.
 dropRecoveryHeader
-    :: WorkMode ssc ctx m
+    :: WorkMode ctx m
     => NodeId
     -> m Bool
 dropRecoveryHeader nodeId = do
@@ -254,22 +282,23 @@ dropRecoveryHeader nodeId = do
                    maybe "noth" show realPeer <> " vs " <> show nodeId
     pure kicked
 
+-- | Drops recovery header and, if it was successful, queries tips.
 dropRecoveryHeaderAndRepeat
-    :: (SscWorkersClass ssc, WorkMode ssc ctx m)
+    :: (WorkMode ctx m)
     => EnqueueMsg m -> NodeId -> m ()
 dropRecoveryHeaderAndRepeat enqueue nodeId = do
     kicked <- dropRecoveryHeader nodeId
     when kicked $ attemptRestartRecovery
   where
     attemptRestartRecovery = do
-        logInfo "Attempting to restart recovery"
+        logDebug "Attempting to restart recovery"
         delay $ sec 2
         handleAll handleRecoveryTriggerE $ triggerRecovery enqueue
         logDebug "Attempting to restart recovery over"
     handleRecoveryTriggerE =
         -- REPORT:ERROR 'reportOrLogE' somewhere in block retrieval.
         reportOrLogE $ "Exception happened while trying to trigger " <>
-                       "recovery inside recoveryWorker: "
+                       "recovery inside dropRecoveryHeaderAndRepeat: "
 
 ----------------------------------------------------------------------------
 -- Block request/processing logic
@@ -278,11 +307,11 @@ dropRecoveryHeaderAndRepeat enqueue nodeId = do
 -- Returns only if blocks were successfully downloaded and
 -- processed. Throws exception if something goes wrong.
 getProcessBlocks
-    :: forall ssc ctx m.
-       (SscWorkersClass ssc, WorkMode ssc ctx m)
+    :: forall ctx m.
+       (WorkMode ctx m)
     => EnqueueMsg m
     -> NodeId
-    -> BlockHeader ssc
+    -> BlockHeader
     -> HeaderHash
     -> m ()
 getProcessBlocks enqueue nodeId lcaChild newestHash = do
@@ -290,12 +319,13 @@ getProcessBlocks enqueue nodeId lcaChild newestHash = do
     -- them. Each one gives a 'Bool' where 'True' means that a recovery was
     -- completed (depends upon the state of the recovery-mode TMVar).
     enqueueMsgSingle enqueue (MsgRequestBlocks (S.singleton nodeId)) $ Conversation $
-      \(conv :: ConversationActions MsgGetBlocks (MsgBlock ssc) m) -> do
+      \(conv :: ConversationActions MsgGetBlocks MsgBlock m) -> do
         let lcaChildHash = headerHash lcaChild
         logDebug $ sformat ("Requesting blocks from "%shortHashF%" to "%shortHashF)
                            lcaChildHash
                            newestHash
         send conv $ mkBlocksRequest lcaChildHash newestHash
+        logDebug "Requested blocks, waiting for the response"
         chainE <- runExceptT (retrieveBlocks conv lcaChild newestHash)
         recHeaderVar <- view (lensOf @RecoveryHeaderTag)
         case chainE of
@@ -318,15 +348,18 @@ getProcessBlocks enqueue nodeId lcaChild newestHash = do
                 -- difficulty than ncrecoveryheader, we're
                 -- gracefully exiting recovery mode.
                 let isMoreDifficultThan b x = b ^. difficultyL >= x ^. difficultyL
-                atomically $ tryReadTMVar recHeaderVar >>= \case
+                exitedRecovery <- atomically $ tryReadTMVar recHeaderVar >>= \case
                     -- We're not in recovery mode? That must be ok.
-                    Nothing -> pass
+                    Nothing -> pure False
                     -- If we're in recovery mode we should exit it if
                     -- any block is more difficult than one in
                     -- recHeader.
                     Just (_, rHeader) ->
-                        when (any (`isMoreDifficultThan` rHeader) blocks) $
-                            void $ tryTakeTMVar recHeaderVar
+                        if any (`isMoreDifficultThan` rHeader) blocks
+                        then isJust <$> tryTakeTMVar recHeaderVar
+                        else pure False
+                when exitedRecovery $
+                    logInfo "Recovery mode exited gracefully on receiving block we needed"
 
 
 ----------------------------------------------------------------------------
@@ -334,11 +367,11 @@ getProcessBlocks enqueue nodeId lcaChild newestHash = do
 ----------------------------------------------------------------------------
 
 retrieveBlocks
-    :: (SscWorkersClass ssc, WorkMode ssc ctx m)
-    => ConversationActions MsgGetBlocks (MsgBlock ssc) m
-    -> BlockHeader ssc
+    :: (WorkMode ctx m)
+    => ConversationActions MsgGetBlocks MsgBlock m
+    -> BlockHeader
     -> HeaderHash
-    -> ExceptT Text m (OldestFirst NE (Block ssc))
+    -> ExceptT Text m (OldestFirst NE Block)
 retrieveBlocks conv lcaChild endH = do
     blocks <- retrieveBlocksDo 0 conv (lcaChild ^. prevBlockL) endH
     let b0 = blocks ^. _OldestFirst . _neHead
@@ -350,12 +383,12 @@ retrieveBlocks conv lcaChild endH = do
                 (b0 ^. blockHeader) lcaChild
 
 retrieveBlocksDo
-    :: (SscWorkersClass ssc, WorkMode ssc ctx m)
+    :: (WorkMode ctx m)
     => Int        -- ^ Index of block we're requesting
-    -> ConversationActions MsgGetBlocks (MsgBlock ssc) m
+    -> ConversationActions MsgGetBlocks MsgBlock m
     -> HeaderHash -- ^ We're expecting a child of this block
     -> HeaderHash -- ^ Block at which to stop
-    -> ExceptT Text m (OldestFirst NE (Block ssc))
+    -> ExceptT Text m (OldestFirst NE Block)
 retrieveBlocksDo i conv prevH endH = lift (recvLimited conv) >>= \case
     Nothing ->
         throwError $ sformat ("Failed to receive block #"%int) i

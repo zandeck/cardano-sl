@@ -18,15 +18,14 @@ import           System.Wlog                      (LoggerName, WithLogger)
 import           Pos.Behavior                     (BehaviorConfig (..))
 import           Pos.Client.CLI.NodeOptions       (CommonNodeArgs (..), NodeArgs (..))
 import           Pos.Client.CLI.Options           (CommonArgs (..))
-import           Pos.Client.CLI.Secrets           (updateUserSecretVSS,
-                                                   userSecretWithGenesisKey)
+import           Pos.Client.CLI.Secrets           (prepareUserSecret)
 import           Pos.Core.Configuration           (HasConfiguration)
 import           Pos.Crypto                       (VssKeyPair)
 import           Pos.Launcher                     (BaseParams (..), LoggingParams (..),
                                                    NodeParams (..))
 import           Pos.Network.CLI                  (intNetworkConfigOpts)
-import           Pos.Ssc.GodTossing               (GtParams (..))
-import           Pos.Ssc.GodTossing.Configuration (HasGtConfiguration)
+import           Pos.Ssc                          (SscParams (..))
+import           Pos.Ssc.Configuration            (HasSscConfiguration)
 import           Pos.Update.Params                (UpdateParams (..))
 import           Pos.Util.UserSecret              (peekUserSecret)
 
@@ -36,18 +35,19 @@ loggingParams tag CommonNodeArgs{..} =
     { lpHandlerPrefix = logPrefix commonArgs
     , lpConfigPath    = logConfig commonArgs
     , lpRunnerTag     = tag
+    , lpConsoleLog    = Nothing -- no override by default
     }
 
 getBaseParams :: LoggerName -> CommonNodeArgs -> BaseParams
 getBaseParams loggingTag args@CommonNodeArgs {..} =
     BaseParams { bpLoggingParams = loggingParams loggingTag args }
 
-gtSscParams :: CommonNodeArgs -> VssKeyPair -> BehaviorConfig -> GtParams
+gtSscParams :: CommonNodeArgs -> VssKeyPair -> BehaviorConfig -> SscParams
 gtSscParams CommonNodeArgs {..} vssSK BehaviorConfig{..} =
-    GtParams
-    { gtpSscEnabled = True
-    , gtpVssKeyPair = vssSK
-    , gtpBehavior   = bcGtBehavior
+    SscParams
+    { spSscEnabled = True
+    , spVssKeyPair = vssSK
+    , spBehavior   = bcSscBehavior
     }
 
 getKeyfilePath :: CommonNodeArgs -> FilePath
@@ -64,16 +64,14 @@ getNodeParams ::
        , Mockable Catch m
        , Mockable Throw m
        , HasConfiguration
-       , HasGtConfiguration
+       , HasSscConfiguration
        )
     => CommonNodeArgs
     -> NodeArgs
     -> m NodeParams
 getNodeParams cArgs@CommonNodeArgs{..} NodeArgs{..} = do
     (primarySK, userSecret) <-
-        userSecretWithGenesisKey cArgs =<<
-            updateUserSecretVSS cArgs =<<
-                peekUserSecret (getKeyfilePath cArgs)
+        prepareUserSecret cArgs =<< peekUserSecret (getKeyfilePath cArgs)
     npNetworkConfig <- intNetworkConfigOpts networkConfigOpts
     npBehaviorConfig <- case behaviorConfigPath of
         Nothing -> pure def

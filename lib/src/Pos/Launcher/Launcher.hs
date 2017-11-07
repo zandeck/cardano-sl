@@ -10,18 +10,19 @@ import           Mockable                         (Production)
 import           Pos.Communication.Protocol       (OutSpecs, WorkerSpec)
 import           Pos.Configuration                (HasNodeConfiguration)
 import           Pos.Core                         (HasConfiguration)
+import           Pos.DB.DB                        (initNodeDBs)
 import           Pos.Infra.Configuration          (HasInfraConfiguration)
 import           Pos.Launcher.Param               (NodeParams (..))
 import           Pos.Launcher.Resource            (NodeResources (..),
                                                    bracketNodeResources)
 import           Pos.Launcher.Runner              (runRealMode)
 import           Pos.Launcher.Scenario            (runNode)
-import           Pos.Ssc.Class                    (SscConstraint)
-import           Pos.Ssc.Class.Types              (SscParams)
-import           Pos.Ssc.GodTossing.Configuration (HasGtConfiguration)
+import           Pos.Ssc.Types                    (SscParams)
+import           Pos.Ssc.Configuration            (HasSscConfiguration)
+import           Pos.Txp                          (txpGlobalSettings)
 import           Pos.Update.Configuration         (HasUpdateConfiguration)
 import           Pos.Util.CompileInfo             (HasCompileInfo)
-import           Pos.WorkMode                     (RealMode)
+import           Pos.WorkMode                     (EmptyMempoolExt, RealMode)
 
 -----------------------------------------------------------------------------
 -- Main launchers
@@ -29,29 +30,21 @@ import           Pos.WorkMode                     (RealMode)
 
 -- | Run full node in real mode.
 runNodeReal
-    :: forall ssc.
-       ( SscConstraint ssc
-       , HasConfiguration
+    :: ( HasConfiguration
        , HasUpdateConfiguration
        , HasInfraConfiguration
-       -- FIXME avieth
-       -- godtossing is always assumed, regardless of the forall ssc.
-       -- It wasn't noticed before, because the godtossing data was in some
-       -- global mutable variable and so didn't appear as a bona fide dependency
-       -- in any constraint or left-hand-side of an arrow.
-       -- See 'prepareGStateDB'.
-       , HasGtConfiguration
+       , HasSscConfiguration
        , HasNodeConfiguration
        , HasCompileInfo
        )
     => NodeParams
-    -> SscParams ssc
-    -> ([WorkerSpec (RealMode ssc)], OutSpecs)
+    -> SscParams
+    -> ([WorkerSpec (RealMode EmptyMempoolExt)], OutSpecs)
     -> Production ()
-runNodeReal np sscnp plugins = bracketNodeResources np sscnp action
+runNodeReal np sscnp plugins = bracketNodeResources np sscnp txpGlobalSettings initNodeDBs action
   where
-    action :: HasConfiguration => NodeResources ssc (RealMode ssc) -> Production ()
+    action :: HasConfiguration => NodeResources EmptyMempoolExt (RealMode EmptyMempoolExt) -> Production ()
     action nr@NodeResources {..} =
         runRealMode
             nr
-            (runNode @ssc nr plugins)
+            (runNode nr plugins)

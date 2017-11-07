@@ -65,9 +65,9 @@ import           Pos.Binary.Class           (Bi, Raw)
 import           Pos.Binary.Crypto          ()
 import           Pos.Core                   (BlockVersion, BlockVersionData (..),
                                              CoinPortion, EpochIndex, FlatSlotId,
-                                             IsGenesisHeader, IsMainHeader, ScriptVersion,
-                                             SoftforkRule, SoftwareVersion, TxFeePolicy,
-                                             addressHash, HasConfiguration)
+                                             HasConfiguration, IsGenesisHeader,
+                                             IsMainHeader, ScriptVersion, SoftforkRule,
+                                             SoftwareVersion, TxFeePolicy, addressHash)
 import           Pos.Crypto                 (Hash, PublicKey, SafeSigner,
                                              SignTag (SignUSProposal), Signature,
                                              checkSig, hash, safeSign, safeToPublic,
@@ -96,14 +96,32 @@ data BlockVersionModifier = BlockVersionModifier
     , bvmSoftforkRule      :: !(Maybe SoftforkRule)
     , bvmTxFeePolicy       :: !(Maybe TxFeePolicy)
     , bvmUnlockStakeEpoch  :: !(Maybe EpochIndex)
-    } deriving (Show, Eq, Generic, Typeable)
+    } deriving (Show, Eq, Ord, Generic, Typeable)
 
 instance NFData BlockVersionModifier
 instance Hashable BlockVersionModifier
 
+instance Default BlockVersionModifier where
+    def = BlockVersionModifier
+        { bvmScriptVersion     = Nothing
+        , bvmSlotDuration      = Nothing
+        , bvmMaxBlockSize      = Nothing
+        , bvmMaxHeaderSize     = Nothing
+        , bvmMaxTxSize         = Nothing
+        , bvmMaxProposalSize   = Nothing
+        , bvmMpcThd            = Nothing
+        , bvmHeavyDelThd       = Nothing
+        , bvmUpdateVoteThd     = Nothing
+        , bvmUpdateProposalThd = Nothing
+        , bvmUpdateImplicit    = Nothing
+        , bvmSoftforkRule      = Nothing
+        , bvmTxFeePolicy       = Nothing
+        , bvmUnlockStakeEpoch  = Nothing
+        }
+
 instance Buildable BlockVersionModifier where
     build BlockVersionModifier {..} =
-      bprint ("{ scripts v"%bmodifier build%
+      bprint ("{ script version: "%bmodifier build%
               ", slot duration (mcs): "%bmodifier int%
               ", block size limit: "%bmodifier memory%
               ", header size limit: "%bmodifier memory%

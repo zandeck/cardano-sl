@@ -15,21 +15,21 @@ import           Servant.Server              (Handler, Server, ServerT)
 import           Servant.Swagger.UI          (swaggerSchemaUIServer)
 import           Servant.Utils.Enter         ((:~>) (..), enter)
 
-import           Pos.Communication           (SendActions (..))
 import           Pos.Update.Configuration    (curSoftwareVersion)
 import           Pos.Wallet.WalletMode       (blockchainSlotDuration)
 import           Pos.Wallet.Web.Account      (GenSeed (RandomSeed))
 import           Pos.Wallet.Web.Api          (WalletApi, WalletSwaggerApi)
 import qualified Pos.Wallet.Web.Methods      as M
-import           Pos.Wallet.Web.Mode         (MonadWalletWebMode)
+import           Pos.Wallet.Web.Mode         (MonadFullWalletWebMode)
 import           Pos.Wallet.Web.Tracking     (fixingCachedAccModifier)
 
 servantHandlers
-    :: MonadWalletWebMode m
-    => SendActions m
-    -> ServerT WalletApi m
-servantHandlers sendActions =
+    :: MonadFullWalletWebMode ctx m
+    => ServerT WalletApi m
+servantHandlers =
      M.testResetAll
+    :<|>
+     M.dumpState
     :<|>
 
      M.getWallet
@@ -71,7 +71,7 @@ servantHandlers sendActions =
      M.updateUserProfile
     :<|>
 
-     M.newPayment sendActions
+     M.newPayment
     :<|>
      M.getTxFee
     :<|>
@@ -87,32 +87,33 @@ servantHandlers sendActions =
      M.applyUpdate
     :<|>
 
-     M.redeemAda sendActions
+     M.redeemAda
     :<|>
-     M.redeemAdaPaperVend sendActions
+     M.redeemAdaPaperVend
     :<|>
 
      M.reportingInitialized
     :<|>
 
      (blockchainSlotDuration <&> fromIntegral)
-    :<|>
-     pure curSoftwareVersion
+    :<|> pure curSoftwareVersion
     :<|>
      M.syncProgress
+    :<|>
+     M.localTimeDifference
     :<|>
      M.importWalletJSON
     :<|>
      M.exportWalletJSON
+    :<|>
+     M.getClientInfo
 
 servantHandlersWithSwagger
-    :: MonadWalletWebMode m
-    => SendActions m
-    -> (m :~> Handler)
+    :: MonadFullWalletWebMode ctx m
+    => (m :~> Handler)
     -> Server WalletSwaggerApi
-servantHandlersWithSwagger sendActions nat =
-    nat `enter` servantHandlers sendActions
+servantHandlersWithSwagger nat =
+    nat `enter` servantHandlers
    :<|>
     -- doesn't work for arbitrary monad, so we have to 'enter' above
     swaggerSchemaUIServer swaggerSpecForWalletApi
-

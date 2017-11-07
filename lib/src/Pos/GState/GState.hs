@@ -25,16 +25,12 @@ import           Pos.DB.Rocks                     (DB (..), MonadRealDB, NodeDBs
                                                    usingReadOptions, usingSnapshot)
 import           Pos.Delegation.DB                (initGStateDlg)
 import           Pos.GState.BlockExtra            (initGStateBlockExtra)
-import           Pos.Ssc.GodTossing.Configuration (HasGtConfiguration)
-import           Pos.Ssc.GodTossing.DB            (initGtDB)
+import           Pos.Ssc.Configuration            (HasSscConfiguration)
+import           Pos.Ssc.DB                       (initSscDB)
 import           Pos.Txp.DB                       (initGStateStakes, initGStateUtxo,
                                                    sanityCheckStakes, sanityCheckUtxo)
 import           Pos.Txp.GenesisUtxo              (genesisUtxo)
 import           Pos.Update.DB                    (initGStateUS)
-
-#ifdef WITH_EXPLORER
-import qualified Pos.Explorer.DB                  as ExplorerDB
-#endif
 
 -- | Put missing initial data into GState DB.
 prepareGStateDB ::
@@ -42,13 +38,13 @@ prepareGStateDB ::
        ( MonadReader ctx m
        , MonadDB m
        , HasConfiguration
-       , HasGtConfiguration)
+       , HasSscConfiguration)
     => HeaderHash
     -> m ()
 prepareGStateDB initialTip = unlessM isInitialized $ do
     initGStateCommon initialTip
     initGStateUtxo genesisUtxo
-    initGtDB
+    initSscDB
     initGStateStakes genesisUtxo
     initGStateUS
     initGStateDlg $ gdHeavyDelegation genesisData
@@ -68,9 +64,6 @@ sanityCheckGStateDB ::
 sanityCheckGStateDB = do
     sanityCheckStakes
     sanityCheckUtxo =<< getRealTotalStake
-#ifdef WITH_EXPLORER
-    ExplorerDB.sanityCheckBalances
-#endif
 
 usingGStateSnapshot :: (MonadRealDB ctx m, MonadMask m) => m a -> m a
 usingGStateSnapshot action = do

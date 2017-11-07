@@ -14,19 +14,18 @@ import           System.Wlog         (WithLogger)
 
 import           Pos.Core            (HasConfiguration, HasPrimaryKey)
 import           Pos.DB.Class        (MonadDB, MonadGState)
-import           Pos.KnownPeers      (MonadFormatPeers)
-import           Pos.Lrc.Context     (LrcContext)
+import           Pos.Lrc.Context     (HasLrcContext)
 import           Pos.Recovery.Info   (MonadRecoveryInfo)
-import           Pos.Reporting       (HasReportingContext)
+import           Pos.Reporting       (MonadReporting)
 import           Pos.Security.Params (SecurityParams)
 import           Pos.Shutdown        (HasShutdownContext)
 import           Pos.Slotting        (MonadSlots)
-import           Pos.Ssc.Class.Types (HasSscContext)
-import           Pos.Ssc.Extra       (MonadSscMem)
+import           Pos.Ssc.Mem         (MonadSscMem)
+import           Pos.Ssc.Types       (HasSscContext)
 import           Pos.Util.TimeWarp   (CanJsonLog)
 
 -- | Mode used for all SSC listeners, workers, and the like.
-type SscMode ssc ctx m
+type SscMode ctx m
     = ( WithLogger m
       , CanJsonLog m
       , MonadIO m
@@ -36,15 +35,14 @@ type SscMode ssc ctx m
       , MonadSlots ctx m
       , MonadGState m
       , MonadDB m
-      , MonadFormatPeers m
-      , MonadSscMem ssc ctx m
+      , MonadSscMem ctx m
       , MonadRecoveryInfo m
       , HasShutdownContext ctx
       , MonadReader ctx m
-      , HasSscContext ssc ctx
-      , HasReportingContext ctx
+      , HasSscContext ctx
+      , MonadReporting ctx m
       , HasPrimaryKey ctx
       , HasLens SecurityParams ctx SecurityParams
-      , HasLens LrcContext ctx LrcContext
+      , HasLrcContext ctx
       , HasConfiguration
       )

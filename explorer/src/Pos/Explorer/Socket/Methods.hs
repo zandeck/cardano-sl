@@ -3,6 +3,7 @@
 {-# LANGUAGE RankNTypes          #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell     #-}
+{-# LANGUAGE GADTs               #-}
 
 -- | Logic of Explorer socket-io Server.
 
@@ -55,14 +56,12 @@ import           Network.SocketIO               (Socket, socketId)
 import           Pos.Block.Core                 (Block, mainBlockTxPayload)
 import qualified Pos.Block.Logic                as DB
 import           Pos.Block.Types                (Blund)
-import           Pos.Crypto                     (withHash)
-import           Pos.Crypto                     (hash)
+import           Pos.Crypto                     (hash, withHash)
 import qualified Pos.DB.Block                   as DB
 import           Pos.DB.Class                   (MonadDBRead)
-import           Pos.Explorer                   (TxExtra (..))
-import qualified Pos.Explorer                   as DB
+import           Pos.Explorer.Core              (TxExtra (..))
+import qualified Pos.Explorer.DB                as DB
 import qualified Pos.GState                     as DB
-import           Pos.Ssc.GodTossing             (SscGodTossing)
 import           Pos.Txp                        (Tx (..), TxOut (..), TxOutAux (..),
                                                  txOutAddress, txpTxs)
 import           Pos.Types                      (Address, HeaderHash)
@@ -312,11 +311,11 @@ notifyTxsSubscribers cTxEntries =
 -- | Gets blocks from recent inclusive to old one exclusive.
 getBlundsFromTo
     :: forall ctx m . ExplorerMode ctx m
-    => HeaderHash -> HeaderHash -> m (Maybe [Blund SscGodTossing])
+    => HeaderHash -> HeaderHash -> m (Maybe [Blund])
 getBlundsFromTo recentBlock oldBlock = do
-    mheaders <- DB.getHeadersFromToIncl @SscGodTossing oldBlock recentBlock
+    mheaders <- DB.getHeadersFromToIncl oldBlock recentBlock
     forM (getOldestFirst <$> mheaders) $ \(_ :| headers) ->
-        fmap catMaybes $ forM headers (DB.blkGetBlund @SscGodTossing)
+        catMaybes <$> forM headers DB.blkGetBlund
 
 addrsTouchedByTx
     :: (MonadDBRead m, WithLogger m)
@@ -332,15 +331,15 @@ addrsTouchedByTx tx = do
 
       pure $ addressSetByTxs (_txOutputs tx) inTxs
 
--- | Helper to filter addresses by a given tx from a list of txs 
+-- | Helper to filter addresses by a given tx from a list of txs
 addressSetByTxs :: NonEmpty TxOut -> NonEmpty [TxOut] -> (S.Set Address)
 addressSetByTxs tx txs =
     let txs' = (toList tx) <> (concat txs) in
     S.fromList $ txOutAddress <$> txs'
 
 getBlockTxs
-    :: forall ssc ctx m . ExplorerMode ctx m
-    => Block ssc -> m [TxInternal]
+    :: forall ctx m . (ExplorerMode ctx m)
+    => Block -> m [TxInternal]
 getBlockTxs (Left  _  ) = return []
 getBlockTxs (Right blk) = do
     txs <- topsortTxsOrFail withHash $ toList $ blk ^. mainBlockTxPayload . txpTxs

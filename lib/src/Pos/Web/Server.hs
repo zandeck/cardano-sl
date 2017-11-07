@@ -1,18 +1,13 @@
+{-# LANGUAGE TypeFamilies  #-}
 {-# LANGUAGE TypeOperators #-}
 
 -- | Web server.
 
 module Pos.Web.Server
-       ( MyWorkMode
-       , WebMode
-       , serveImplNoTLS
-       , serveImpl
-       , nat
-       , serveWebBase
-       , applicationBase
+       ( serveImpl
        , route53HealthCheckApplication
-       , serveWebGT
-       , applicationGT
+       , serveWeb
+       , application
        ) where
 
 import           Universum
@@ -20,6 +15,8 @@ import           Universum
 import qualified Control.Monad.Catch             as Catch
 import           Control.Monad.Except            (MonadError (throwError))
 import qualified Control.Monad.Reader            as Mtl
+import           Data.Aeson.TH                   (defaultOptions, deriveToJSON)
+import           Data.Default                    (Default)
 import           Mockable                        (Production (runProduction))
 import           Network.Wai                     (Application)
 import           Network.Wai.Handler.Warp        (defaultSettings, runSettings, setHost,
@@ -31,75 +28,59 @@ import           Servant.Server                  (Handler, ServantErr (errBody),
 import           Servant.Utils.Enter             ((:~>) (NT), enter)
 
 import qualified Network.Broadcast.OutboundQueue as OQ
-import           Pos.Aeson.Types                 ()
+import           Pos.Aeson.Txp                   ()
 import           Pos.Context                     (HasNodeContext (..), HasSscContext (..),
                                                   NodeContext, getOurPublicKey)
 import           Pos.Core                        (EpochIndex (..), SlotLeaders)
 import           Pos.Core.Configuration          (HasConfiguration)
+import           Pos.DB                          (MonadDBRead)
 import qualified Pos.DB                          as DB
 import qualified Pos.GState                      as GS
 import qualified Pos.Lrc.DB                      as LrcDB
 import           Pos.Network.Types               (Bucket (BucketSubscriptionListener),
                                                   Topology, topologyMaxBucketSize)
-import           Pos.Ssc.Class                   (SscConstraint)
-import           Pos.Ssc.GodTossing              (SscGodTossing, gtcParticipateSsc)
+import           Pos.Ssc                         (scParticipateSsc)
 import           Pos.Txp                         (TxOut (..), toaOut)
-import           Pos.Txp.MemState                (GenericTxpLocalData, askTxpMem,
-                                                  getLocalTxs)
+import           Pos.Txp.MemState                (GenericTxpLocalData, MempoolExt,
+                                                  askTxpMem, getLocalTxs)
+import           Pos.Update.Configuration        (HasUpdateConfiguration)
 import           Pos.Web.Mode                    (WebMode, WebModeContext (..))
 import           Pos.WorkMode                    (OQ)
-import           Pos.WorkMode.Class              (TxpExtra_TMP, WorkMode)
+import           Pos.WorkMode.Class              (WorkMode)
 
-import           Pos.Web.Api                     (BaseNodeApi, GodTossingApi, GtNodeApi,
-                                                  HealthCheckApi, baseNodeApi, gtNodeApi,
-                                                  healthCheckApi)
-import           Pos.Web.Types                   (TlsParams (..))
+import           Pos.Web.Api                     (NodeApi, HealthCheckApi,
+                                                  healthCheckApi, nodeApi)
+import           Pos.Web.Types                   (CConfirmedProposalState (..),
+                                                  TlsParams (..))
 
 ----------------------------------------------------------------------------
 -- Top level functionality
 ----------------------------------------------------------------------------
 
--- [CSL-152]: I want SscConstraint to be part of WorkMode.
-type MyWorkMode ssc ctx m =
-    ( WorkMode ssc ctx m
-    , SscConstraint ssc
-    , HasNodeContext ssc ctx -- for ConvertHandler
+type MyWorkMode ctx m =
+    ( WorkMode ctx m
+    , HasNodeContext ctx -- for ConvertHandler
+    , Default (MempoolExt m)
     )
 
-serveWebBase :: MyWorkMode ssc ctx m => Word16 -> Maybe TlsParams -> m ()
-serveWebBase = serveImpl applicationBase "127.0.0.1"
-
-applicationBase :: MyWorkMode ssc ctx m => m Application
-applicationBase = do
-    server <- servantServerBase
-    return $ serve baseNodeApi server
-
-route53HealthCheckApplication :: MyWorkMode ssc ctx m => Topology t -> OQ m -> m Application
+route53HealthCheckApplication :: MyWorkMode ctx m => Topology t -> OQ m -> m Application
 route53HealthCheckApplication topology oq = do
     server <- servantServerHealthCheck topology oq
     return $ serve healthCheckApi server
 
-serveWebGT :: MyWorkMode SscGodTossing ctx m => Word16 -> Maybe TlsParams -> m ()
-serveWebGT = serveImpl applicationGT "127.0.0.1"
+serveWeb :: MyWorkMode ctx m => Word16 -> Maybe TlsParams -> m ()
+serveWeb = serveImpl application "127.0.0.1"
 
-applicationGT :: MyWorkMode SscGodTossing ctx m => m Application
-applicationGT = do
-    server <- servantServerGT
-    return $ serve gtNodeApi server
-
-serveImplNoTLS :: (HasConfiguration, MonadIO m) => m Application -> String -> Word16 -> m ()
-serveImplNoTLS application host port =
-    liftIO . runSettings mySettings =<< application
-  where
-    mySettings = setHost (fromString host) $
-                 setPort (fromIntegral port) defaultSettings
+application :: MyWorkMode ctx m => m Application
+application = do
+    server <- servantServer
+    return $ serve nodeApi server
 
 serveImpl
     :: (HasConfiguration, MonadIO m)
     => m Application -> String -> Word16 -> Maybe TlsParams -> m ()
-serveImpl application host port walletTLSParams =
-    liftIO . maybe runSettings runTLS mTlsConfig mySettings
-        =<< application
+serveImpl app host port walletTLSParams =
+    liftIO . maybe runSettings runTLS mTlsConfig mySettings =<< app
   where
     mySettings = setHost (fromString host) $
                  setPort (fromIntegral port) defaultSettings
@@ -113,11 +94,11 @@ tlsParamsToWai TlsParams{..} = tlsSettingsChain tpCertPath [tpCaPath] tpKeyPath
 ----------------------------------------------------------------------------
 
 convertHandler
-    :: forall ssc a.
-       NodeContext ssc
+    :: forall ext a.
+       NodeContext
     -> DB.NodeDBs
-    -> GenericTxpLocalData TxpExtra_TMP
-    -> WebMode ssc a
+    -> GenericTxpLocalData ext
+    -> WebMode ext a
     -> Handler a
 convertHandler nc nodeDBs txpData handler =
     liftIO
@@ -130,29 +111,32 @@ convertHandler nc nodeDBs txpData handler =
     excHandlers = [Catch.Handler catchServant]
     catchServant = throwError
 
-nat :: forall ssc ctx m . MyWorkMode ssc ctx m => m (WebMode ssc :~> Handler)
+nat
+    :: forall ext ctx m .
+    ( MyWorkMode ctx m, MempoolExt m ~ ext)
+    => m (WebMode ext :~> Handler)
 nat = do
     nc <- view nodeContext
     nodeDBs <- DB.getNodeDBs
     txpLocalData <- askTxpMem
     return $ NT (convertHandler nc nodeDBs txpLocalData)
 
-servantServerBase :: forall ssc ctx m . MyWorkMode ssc ctx m => m (Server (BaseNodeApi ssc))
-servantServerBase = flip enter baseServantHandlers <$> (nat @ssc @ctx @m)
+servantServerHealthCheck :: forall ctx t m . MyWorkMode ctx m => Topology t -> OQ m -> m (Server HealthCheckApi)
+servantServerHealthCheck topology oq =
+    flip enter (healthCheckServantHandlers topology oq) <$> (nat @(MempoolExt m) @ctx @m)
 
-servantServerHealthCheck :: forall ssc ctx t m . MyWorkMode ssc ctx m => Topology t -> OQ m -> m (Server HealthCheckApi)
-servantServerHealthCheck topology oq = flip enter (healthCheckServantHandlers topology oq) <$> (nat @ssc @ctx @m)
-
-servantServerGT :: forall ctx m . MyWorkMode SscGodTossing ctx m => m (Server GtNodeApi)
-servantServerGT = flip enter (baseServantHandlers :<|> gtServantHandlers) <$>
-    (nat @SscGodTossing @ctx @m)
+servantServer :: forall ctx m . MyWorkMode ctx m => m (Server NodeApi)
+servantServer = flip enter nodeServantHandlers <$>
+    (nat @(MempoolExt m) @ctx @m)
 
 ----------------------------------------------------------------------------
--- Base handlers
+-- Node handlers
 ----------------------------------------------------------------------------
 
-baseServantHandlers :: HasConfiguration => ServerT (BaseNodeApi ssc) (WebMode ssc)
-baseServantHandlers =
+nodeServantHandlers
+    :: (HasConfiguration, HasUpdateConfiguration, Default ext)
+    => ServerT NodeApi (WebMode ext)
+nodeServantHandlers =
     getLeaders
     :<|>
     getUtxo
@@ -162,8 +146,15 @@ baseServantHandlers =
     GS.getTip
     :<|>
     getLocalTxsNum
+    :<|>
+    confirmedProposals
+    :<|>
+    toggleSscParticipation
+    -- :<|> sscHasSecret
+    -- :<|> getOurSecret
+    -- :<|> getSscStage
 
-getLeaders :: HasConfiguration => Maybe EpochIndex -> WebMode ssc SlotLeaders
+getLeaders :: HasConfiguration => Maybe EpochIndex -> WebMode ext SlotLeaders
 getLeaders maybeEpoch = do
     -- epoch <- maybe (siEpoch <$> getCurrentSlot) pure maybeEpoch
     epoch <- maybe (pure 0) pure maybeEpoch
@@ -171,21 +162,56 @@ getLeaders maybeEpoch = do
   where
     err = err404 { errBody = encodeUtf8 ("Leaders are not know for current epoch"::Text) }
 
-getUtxo :: HasConfiguration => WebMode ssc [TxOut]
+getUtxo :: HasConfiguration => WebMode ext [TxOut]
 getUtxo = map toaOut . toList <$> GS.getAllPotentiallyHugeUtxo
 
-getLocalTxsNum :: WebMode ssc Word
+getLocalTxsNum :: Default ext => WebMode ext Word
 getLocalTxsNum = fromIntegral . length <$> getLocalTxs
+
+-- | Get info on all confirmed proposals
+confirmedProposals
+    :: (HasUpdateConfiguration, MonadDBRead m)
+    => m [CConfirmedProposalState]
+confirmedProposals = do
+    proposals <- GS.getConfirmedProposals Nothing
+    pure $ map (CConfirmedProposalState . show) proposals
+
+toggleSscParticipation :: Bool -> WebMode ext ()
+toggleSscParticipation enable =
+    view sscContext >>=
+    atomically . flip writeTVar enable . scParticipateSsc
+
+-- sscHasSecret :: SscWebHandler Bool
+-- sscHasSecret = isJust <$> getSecret
+
+-- getOurSecret :: SscWebHandler SharedSeed
+-- getOurSecret = maybe (throw err) (pure . convertSscSecret) =<< getSecret
+--   where
+--     err = err404 { errBody = "I don't have secret" }
+--     doPanic = panic "our secret is malformed"
+--     convertSscSecret =
+--         secretToSharedSeed .
+--         fromMaybe doPanic . fromBinaryM . getOpening . view _2
+
+-- getSscStage :: SscWebHandler SscStage
+-- getSscStage = do
+--     getSscStageImpl . siSlot <$> getCurrentSlot
+--   where
+--     getSscStageImpl idx
+--         | isCommitmentIdx idx = CommitmentStage
+--         | isOpeningIdx idx = OpeningStage
+--         | isSharesIdx idx = SharesStage
+--         | otherwise = OrdinaryStage
 
 ----------------------------------------------------------------------------
 -- HealthCheck handlers
 ----------------------------------------------------------------------------
 
-healthCheckServantHandlers :: Topology t -> OQ m -> ServerT HealthCheckApi (WebMode ssc)
+healthCheckServantHandlers :: Topology t -> OQ m -> ServerT HealthCheckApi (WebMode ext)
 healthCheckServantHandlers topology oq =
     getRoute53HealthCheck topology oq
 
-getRoute53HealthCheck :: Topology t -> OQ m -> ServerT HealthCheckApi (WebMode ssc)
+getRoute53HealthCheck :: Topology t -> OQ m -> ServerT HealthCheckApi (WebMode ext)
 getRoute53HealthCheck (topologyMaxBucketSize -> getSize) oq = do
     let maxCapacityTxt = case getSize BucketSubscriptionListener of
                              OQ.BucketSizeUnlimited -> "unlimited"
@@ -200,44 +226,8 @@ getRoute53HealthCheck (topologyMaxBucketSize -> getSize) oq = do
         OQ.SpareCapacity sc           -> return $ show sc <> "/" <> maxCapacityTxt -- yields 200/OK
 
 ----------------------------------------------------------------------------
--- GodTossing handlers
-----------------------------------------------------------------------------
-
-type GtWebMode = WebMode SscGodTossing
-
-gtServantHandlers :: ServerT GodTossingApi GtWebMode
-gtServantHandlers =
-    toggleGtParticipation {- :<|> gtHasSecret :<|> getOurSecret :<|> getGtStage -}
-
-toggleGtParticipation :: Bool -> GtWebMode ()
-toggleGtParticipation enable =
-    view sscContext >>=
-    atomically . flip writeTVar enable . gtcParticipateSsc
-
--- gtHasSecret :: GtWebHandler Bool
--- gtHasSecret = isJust <$> getSecret
-
--- getOurSecret :: GtWebHandler SharedSeed
--- getOurSecret = maybe (throw err) (pure . convertGtSecret) =<< getSecret
---   where
---     err = err404 { errBody = "I don't have secret" }
---     doPanic = panic "our secret is malformed"
---     convertGtSecret =
---         secretToSharedSeed .
---         fromMaybe doPanic . fromBinaryM . getOpening . view _2
-
--- getGtStage :: GtWebHandler GodTossingStage
--- getGtStage = do
---     getGtStageImpl . siSlot <$> getCurrentSlot
---   where
---     getGtStageImpl idx
---         | isCommitmentIdx idx = CommitmentStage
---         | isOpeningIdx idx = OpeningStage
---         | isSharesIdx idx = SharesStage
---         | otherwise = OrdinaryStage
-
-----------------------------------------------------------------------------
 -- Orphan instances
 ----------------------------------------------------------------------------
 
 deriving instance FromHttpApiData EpochIndex
+deriveToJSON defaultOptions ''CConfirmedProposalState

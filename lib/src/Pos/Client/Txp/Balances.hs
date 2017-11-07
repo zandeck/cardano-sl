@@ -4,29 +4,19 @@ module Pos.Client.Txp.Balances
        ( MonadBalances(..)
        , getOwnUtxo
        , getBalanceFromUtxo
-       , getOwnUtxosDefault
-       , getBalanceDefault
+       , getOwnUtxosGenesis
        , getOwnUtxoForPk
        ) where
 
 import           Universum
 
-import           Control.Monad.Trans  (MonadTrans)
-import qualified Data.HashSet         as HS
-import           Data.List            (partition)
-import qualified Data.Map             as M
+import           Control.Monad.Trans (MonadTrans)
 
-import           Pos.Core             (Address (..), Coin, IsBootstrapEraAddr (..),
-                                       isRedeemAddress, makePubKeyAddress)
-import           Pos.Crypto           (PublicKey)
-import           Pos.DB               (MonadDBRead, MonadGState, MonadRealDB)
-import           Pos.Txp              (MonadTxpMem, Utxo, addrBelongsToSet,
-                                       getUtxoModifier)
-import qualified Pos.Txp.DB           as DB
-import           Pos.Txp.Toil.Utxo    (getTotalCoinsInUtxo)
-import qualified Pos.Util.Modifier    as MM
-import           Pos.Wallet.Web.State (WebWalletModeDB)
-import qualified Pos.Wallet.Web.State as WS
+import           Pos.Core            (Address (..), Coin, HasConfiguration,
+                                      IsBootstrapEraAddr (..), makePubKeyAddress)
+import           Pos.Crypto          (PublicKey)
+import           Pos.Txp             (Utxo, filterUtxoByAddrs, genesisUtxo, unGenesisUtxo)
+import           Pos.Txp.Toil.Utxo   (getTotalCoinsInUtxo)
 
 -- | A class which have the methods to get state of address' balance
 class Monad m => MonadBalances m where
@@ -45,34 +35,8 @@ instance {-# OVERLAPPABLE #-}
 getBalanceFromUtxo :: MonadBalances m => Address -> m Coin
 getBalanceFromUtxo addr = getTotalCoinsInUtxo <$> getOwnUtxo addr
 
-type BalancesEnv ext ctx m =
-    ( MonadRealDB ctx m
-    , MonadDBRead m
-    , MonadGState m
-    , WebWalletModeDB ctx m
-    , MonadMask m
-    , MonadTxpMem ext ctx m)
-
-getOwnUtxosDefault :: BalancesEnv ext ctx m => [Address] -> m Utxo
-getOwnUtxosDefault addrs = do
-    let (redeemAddrs, commonAddrs) = partition isRedeemAddress addrs
-
-    updates <- getUtxoModifier
-    commonUtxo <- if null commonAddrs then pure mempty
-                    else WS.getWalletUtxo
-    redeemUtxo <- if null redeemAddrs then pure mempty
-                    else DB.getFilteredUtxo redeemAddrs
-
-    let allUtxo = MM.modifyMap updates $ commonUtxo <> redeemUtxo
-        addrsSet = HS.fromList addrs
-    pure $ M.filter (`addrBelongsToSet` addrsSet) allUtxo
-
--- | `BalanceDB` isn't used here anymore, because
--- 1) It doesn't represent actual balances of addresses, but it represents _stakes_
--- 2) Local utxo is now cached, and deriving balances from it is not
---    so bad for performance now
-getBalanceDefault :: (MonadBalances m) => Address -> m Coin
-getBalanceDefault addr = getBalanceFromUtxo addr
+getOwnUtxosGenesis :: (HasConfiguration, Applicative m) => [Address] -> m Utxo
+getOwnUtxosGenesis addrs = pure $ filterUtxoByAddrs addrs (unGenesisUtxo genesisUtxo)
 
 getOwnUtxo :: MonadBalances m => Address -> m Utxo
 getOwnUtxo = getOwnUtxos . one

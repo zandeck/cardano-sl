@@ -24,6 +24,7 @@ module Pos.Util.Util
        , leftToPanic
        , dumpSplices
        , histogram
+       , median
        , (<//>)
 
        -- * Lenses
@@ -31,6 +32,7 @@ module Pos.Util.Util
        , _neTail
        , _neLast
        , postfixLFields
+       , postfixLFields2
 
        -- * Ether
        , ether
@@ -87,6 +89,7 @@ module Pos.Util.Util
 
        -- ** Buildable
        -- *** "Data.Time.Units" types
+       -- *** @()@
        ) where
 
 import           Universum
@@ -113,6 +116,7 @@ import           Data.Hashable                  (Hashable (hashWithSalt))
 import qualified Data.HashMap.Strict            as HM
 import           Data.HashSet                   (fromMap)
 import           Data.List                      (last)
+import qualified Data.List.NonEmpty             as NE
 import qualified Data.Map                       as M
 import qualified Data.Semigroup                 as Smg
 import           Data.Tagged                    (Tagged (Tagged))
@@ -214,7 +218,7 @@ instance IsString s => MonadFail (Either s) where
     fail = Left . fromString
 
 instance Rand.DRG drg => HasLoggerName (Rand.MonadPseudoRandom drg) where
-    getLoggerName = pure mempty
+    getLoggerName = pure "MonadPseudoRandom"
     modifyLoggerName = flip const
 
 instance {-# OVERLAPPABLE #-}
@@ -241,7 +245,7 @@ instance NFData Microsecond where
 
 
 ----------------------------------------------------------------------------
--- Orphan Buildable instances for time-units
+-- Orphan Buildable instances
 ----------------------------------------------------------------------------
 
 instance Buildable Attosecond  where build = build @String . show
@@ -260,6 +264,10 @@ instance Buildable Fortnight   where build = build @String . show
 -- it breaks things sometimes.
 instance Buildable Microsecond where
     build = build . (++ "mcs") . show . toMicroseconds
+
+-- | This orphan instance is sometimes useful and why not have it?
+instance Buildable () where
+    build _ = "()"
 
 ----------------------------------------------------------------------------
 -- MonadResource/ResourceT
@@ -475,12 +483,21 @@ dumpSplices x = do
 postfixLFields :: LensRules
 postfixLFields = lensRules & lensField .~ mappingNamer (\s -> [s++"_L"])
 
+postfixLFields2 :: LensRules
+postfixLFields2 = lensRules & lensField .~ mappingNamer (\s -> [s++"L"])
+
 -- | Count elements in a list.
 histogram :: forall a. Ord a => [a] -> Map a Int
 histogram = foldl' step M.empty
   where
     step :: Map a Int -> a -> Map a Int
     step m x = M.insertWith (+) x 1 m
+
+median :: Ord a => NonEmpty a -> a
+median l = NE.sort l NE.!! middle
+  where
+    len = NE.length l
+    middle = (len - 1) `div` 2
 
 -- MinMax
 

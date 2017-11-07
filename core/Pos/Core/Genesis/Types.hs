@@ -1,3 +1,5 @@
+{-# LANGUAGE TypeFamilies #-}
+
 -- | Types related to genesis core data.
 
 module Pos.Core.Genesis.Types
@@ -6,18 +8,15 @@ module Pos.Core.Genesis.Types
        , GenesisDelegation (..)
        , GenesisVssCertificatesMap (..)
        , noGenesisDelegation
-       , mkGenesisDelegation
 
          -- * GenesisSpec
        , TestnetBalanceOptions (..)
        , FakeAvvmOptions (..)
-       , TestnetDistribution (..)
        , GenesisInitializer (..)
        , GenesisAvvmBalances (..)
        , GenesisNonAvvmBalances (..)
        , ProtocolConstants (..)
        , GenesisSpec (..)
-       , convertNonAvvmDataToBalances
        , mkGenesisSpec
 
        -- * GenesisData
@@ -27,25 +26,29 @@ module Pos.Core.Genesis.Types
 
 import           Universum
 
-import           Control.Lens             (at)
 import           Control.Monad.Except     (MonadError (throwError))
+import           Data.Hashable            (Hashable)
 import qualified Data.HashMap.Strict      as HM
 import qualified Data.Text.Buildable      as Buildable
 import           Fmt                      (genericF)
-import           Formatting               (bprint, build, fixed, int, sformat, (%))
+import           Formatting               (bprint, build, fixed, int, (%))
 import           Serokell.Util            (allDistinct, mapJson)
 
-import           Pos.Binary.Class         (Bi)
-import           Pos.Core.Address         (addressHash, decodeTextAddress)
-import           Pos.Core.Coin            (unsafeAddCoin, unsafeIntegerToCoin)
-import           Pos.Core.Types           (Address, BlockVersionData, Coin, ProxySKHeavy,
-                                           SharedSeed, StakeholderId, Timestamp)
+import           Pos.Binary.Crypto        ()
+import           Pos.Core.Coin            ()
+import           Pos.Core.Types           (Address, BlockVersionData, Coin, CoinPortion,
+                                           ProxySKHeavy, SharedSeed, StakeholderId,
+                                           Timestamp)
 import           Pos.Core.Vss.Types       (VssCertificatesMap, getVssCertificatesMap)
-import           Pos.Crypto.Signing.Types (ProxySecretKey (..), RedeemPublicKey,
-                                           isSelfSignedPsk)
+import           Pos.Crypto.Signing.Types (RedeemPublicKey)
 
 -- | Wrapper around weighted stakeholders map to be used in genesis
 -- core data.
+--
+-- Each 'Word16' is a weight. I.e. if stakeholder A has weight "1"
+-- and stakeholder B has weight "3", during the bootstrap era
+-- all stake in the system will be divided between A and B
+-- in proportion of 1:3.
 newtype GenesisWStakeholders = GenesisWStakeholders
     { getGenesisWStakeholders :: Map StakeholderId Word16
     } deriving (Show, Eq, Monoid)
@@ -73,38 +76,13 @@ instance Buildable GenesisVssCertificatesMap where
 --    It's not needed in genesis, it can always be reduced.
 newtype GenesisDelegation = UnsafeGenesisDelegation
     { unGenesisDelegation :: HashMap StakeholderId ProxySKHeavy
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Container, NontrivialContainer)
+
+type instance Element GenesisDelegation = ProxySKHeavy
 
 -- | Empty 'GenesisDelegation'.
 noGenesisDelegation :: GenesisDelegation
 noGenesisDelegation = UnsafeGenesisDelegation mempty
-
--- | Safe constructor of 'GenesisDelegation'.
-mkGenesisDelegation ::
-       MonadError Text m
-    => HashMap StakeholderId ProxySKHeavy
-    -> m GenesisDelegation
-mkGenesisDelegation pskM = do
-    forM_ (HM.toList pskM) $ \(k, ProxySecretKey{..}) ->
-        when (addressHash pskIssuerPk /= k) $
-            throwError $ sformat
-                ("wrong issuerPk set as key for delegation map: "%
-                 "issuer id = "%build%", cert id = "%build)
-                k (addressHash pskIssuerPk)
-    unless (allDistinct $ pskIssuerPk <$> psks) $
-        throwError "all issuers must be distinct"
-    when (any isSelfSignedPsk psks) $
-        throwError "there is a self-signed (revocation) psk"
-    let resPairs =
-            psks <&> \psk@ProxySecretKey {..} -> (addressHash pskIssuerPk, psk)
-    let resMap = HM.fromList resPairs
-    let isIssuer ProxySecretKey {..} =
-            isJust $ resMap ^. at (addressHash pskDelegatePk)
-    when (any isIssuer psks) $
-        throwError "one of the delegates is also an issuer, don't do it"
-    return $ UnsafeGenesisDelegation resMap
-  where
-    psks = toList pskM
 
 ----------------------------------------------------------------------------
 -- Genesis Spec
@@ -149,30 +127,18 @@ data FakeAvvmOptions = FakeAvvmOptions
 instance Buildable FakeAvvmOptions where
     build = genericF
 
--- | This data type determines how to generate bootstrap stakeholders
--- in testnet.
-data TestnetDistribution
-    = TestnetRichmenStakeDistr
-    -- ^ Rich nodes will be bootstrap stakeholders with equal weights.
-    | TestnetCustomStakeDistr
-    { tcsdBootStakeholders :: !GenesisWStakeholders
-    -- ^ Bootstrap stakeholders and their weights are provided explicitly.
-    , tcsdVssCerts         :: !GenesisVssCertificatesMap
-    -- ^ Vss certificates are provided explicitly too, because they
-    -- can't be generated automatically in this case.
-    } deriving (Show, Generic)
-
-instance Buildable TestnetDistribution where
-    build = genericF
-
 -- | This data type contains various options presense of which depends
 -- on whether we want genesis for mainnet or testnet.
 data GenesisInitializer
     = TestnetInitializer {
-      tiTestBalance     :: !TestnetBalanceOptions
-    , tiFakeAvvmBalance :: !FakeAvvmOptions
-    , tiDistribution    :: !TestnetDistribution
-    , tiSeed            :: !Integer
+      tiTestBalance       :: !TestnetBalanceOptions
+    , tiFakeAvvmBalance   :: !FakeAvvmOptions
+    , tiAvvmBalanceFactor :: !CoinPortion
+    -- ^ Avvm balances will be multiplied by this factor.
+    , tiUseHeavyDlg       :: !Bool
+    -- ^ Whether to use heavyweight delegation for bootstrap era
+    -- stakeholders.
+    , tiSeed              :: !Integer
       -- ^ Seed to use to generate secret data. It's used only in
       -- testnet, shouldn't be used for anything important.
     }
@@ -183,7 +149,8 @@ data GenesisInitializer
     , miNonAvvmBalances  :: !GenesisNonAvvmBalances
     } deriving (Show)
 
-instance Bi Address => Buildable GenesisInitializer where
+instance (Hashable Address, Buildable Address) =>
+         Buildable GenesisInitializer where
     build =
         \case
             TestnetInitializer {..} ->
@@ -191,14 +158,16 @@ instance Bi Address => Buildable GenesisInitializer where
                     ("TestnetInitializer {\n"%
                      "  "%build%"\n"%
                      "  "%build%"\n"%
-                     "  "%build%"\n"%
+                     "  avvm balance factor: "%build%"\n"%
+                     "  heavyDlg: "%build%"\n"%
                      "  seed: "%int%"\n"%
                      "}\n"
                     )
 
                     tiTestBalance
                     tiFakeAvvmBalance
-                    tiDistribution
+                    tiAvvmBalanceFactor
+                    tiUseHeavyDlg
                     tiSeed
             MainnetInitializer {..} ->
                 bprint
@@ -224,28 +193,12 @@ newtype GenesisNonAvvmBalances = GenesisNonAvvmBalances
     { getGenesisNonAvvmBalances :: HashMap Address Coin
     } deriving (Show, Eq)
 
-instance Bi Address => Buildable GenesisNonAvvmBalances where
+instance (Hashable Address, Buildable Address) =>
+         Buildable GenesisNonAvvmBalances where
     build (GenesisNonAvvmBalances m) =
-        bprint ("GenesisNonAvvmBalances: "%mapJson) m
+        bprint ("GenesisNonAvvmBalances: " %mapJson) m
 
-deriving instance Bi Address => Monoid GenesisNonAvvmBalances
-
--- | Generate genesis address distribution out of avvm
--- parameters. Txdistr of the utxo is all empty. Redelegate it in
--- calling funciton.
-convertNonAvvmDataToBalances
-    :: forall m .
-       ( MonadFail m, Bi Address )
-    => HashMap Text Integer
-    -> m GenesisNonAvvmBalances
-convertNonAvvmDataToBalances balances = GenesisNonAvvmBalances <$> balances'
-  where
-    balances' :: m (HashMap Address Coin)
-    balances' = HM.fromListWith unsafeAddCoin <$> traverse convert (HM.toList balances)
-    convert :: (Text, Integer) -> m (Address, Coin)
-    convert (txt, i) = case decodeTextAddress txt of
-        Left err   -> fail (toString err)
-        Right addr -> return (addr, unsafeIntegerToCoin i)
+deriving instance Hashable Address => Monoid GenesisNonAvvmBalances
 
 -- | 'ProtocolConstants' are not really part of genesis global state,
 -- but they affect consensus, so they are part of 'GenesisSpec' and
@@ -268,7 +221,9 @@ data GenesisSpec = UnsafeGenesisSpec
     , gsFtsSeed           :: !SharedSeed
     -- ^ Seed for FTS for 0-th epoch.
     , gsHeavyDelegation   :: !GenesisDelegation
-    -- ^ Genesis state of heavyweight delegation.
+    -- ^ Genesis state of heavyweight delegation. Will be concatenated
+    -- with genesis delegation for bootstrap stakeholders if
+    -- 'tiUseHeavyDlg' is 'True'.
     , gsBlockVersionData  :: !BlockVersionData
     -- ^ Genesis 'BlockVersionData'.
     , gsProtocolConstants :: !ProtocolConstants

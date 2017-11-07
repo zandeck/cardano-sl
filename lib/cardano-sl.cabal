@@ -1,5 +1,5 @@
 name:                cardano-sl
-version:             1.0.1
+version:             1.0.3
 synopsis:            Cardano SL main implementation
 description:         Please see README.md
 license:             MIT
@@ -12,18 +12,6 @@ build-type:          Simple
 extra-source-files:  README.md
 cabal-version:       >=1.10
 
-Flag with-wallet
-  default:     False
-  manual:      True
-
-  description: Build with wallet
-
-Flag with-explorer
-  default:     True
-  manual:      True
-
-  description: Build with explorer
-
 library
   exposed-modules:      Paths_cardano_sl
 
@@ -32,7 +20,6 @@ library
                         -- Arbitrary instances
                         Pos.Arbitrary.Block
                         Pos.Arbitrary.Delegation
-                        Pos.Arbitrary.Txp.Network
 
                         Pos.Aeson
                         Pos.Binary
@@ -72,6 +59,8 @@ library
                         Pos.Behavior
 
                         -- Something
+                        Pos.Types
+
                         Pos.Launcher
                         Pos.Launcher.Configuration
                         Pos.Launcher.Resource
@@ -84,10 +73,6 @@ library
                         Pos.Security
                         Pos.Security.Workers
 
-                        -- SSC
-                        Pos.Ssc.GodTossing
-                        Pos.Ssc.SscAlgo
-
                         -- Statistics
                         Pos.Statistics
 
@@ -95,6 +80,7 @@ library
                         Pos.Recovery
 
                         -- Client
+                        Pos.Client.KeyStorage
                         Pos.Client.Txp.Addresses
                         Pos.Client.Txp.Balances
                         Pos.Client.Txp.History
@@ -102,11 +88,6 @@ library
 
                         -- Client CLI
                         Pos.Client.CLI
-
-                        -- Txp
-                        Pos.Txp
-
-                        Pos.Types
 
                         -- Update system
                         Pos.Update
@@ -121,28 +102,6 @@ library
                         Pos.Util.JsonLog
                         Pos.Util.OutboundQueue
                         Pos.Util.UserSecret
-
-                        -- Wallets
-                        Pos.Wallet
-                        Pos.Wallet.KeyStorage
-                        Pos.Wallet.SscType
-                        Pos.Wallet.WalletMode
-                        Pos.Wallet.Web.Assurance
-                        Pos.Wallet.Web.ClientTypes
-                        Pos.Wallet.Web.ClientTypes.Functions
-                        Pos.Wallet.Web.ClientTypes.Instances
-                        Pos.Wallet.Web.ClientTypes.Types
-                        Pos.Wallet.Web.Error
-                        Pos.Wallet.Web.Error.Types
-                        Pos.Wallet.Web.Error.Util
-                        Pos.Wallet.Web.Pending.Types
-                        Pos.Wallet.Web.Pending.Util
-                        Pos.Wallet.Web.State
-                        Pos.Wallet.Web.State.Acidic
-                        Pos.Wallet.Web.State.State
-                        Pos.Wallet.Web.State.Storage
-                        Pos.Wallet.Web.Secret
-                        Pos.Wallet.Web.Util
 
                         Pos.Web
                         Pos.Web.Api
@@ -166,13 +125,16 @@ library
                         Pos.Block.Logic.VAR
                         Pos.Generator.Block.Param
 
+                        -- Common code for tests
+                        Test.Pos.Configuration
+                        Test.Pos.Util
+                        Test.Pos.Block.Logic.Emulation
+                        Test.Pos.Block.Logic.Mode
+                        Test.Pos.Block.Logic.Util
+                        Test.Pos.Block.Logic.Event
+
   -- Explorer (TODO: move into cardano-explorer)
   exposed-modules:
-                        Pos.Explorer
-
-                        -- Needed for testing
-                        Pos.Arbitrary.Explorer
-
                         Pos.Util.Servant
 
   other-modules:        Pos.Aeson.Types
@@ -183,9 +145,6 @@ library
                         Pos.Binary.Block.Core
                         Pos.Binary.Block.Slog
                         Pos.Binary.Delegation
-                        Pos.Binary.Ssc
-                        Pos.Binary.Txp
-                        Pos.Binary.Txp.Network
 
                         -- Block processing
                         Pos.Block.Core.Genesis
@@ -297,31 +256,11 @@ library
                         Pos.Statistics.Ekg
                         Pos.Statistics.Statsd
 
-                        -- Txp
-                        Pos.Txp.Network
-                        Pos.Txp.Network.Listeners
-                        Pos.Txp.Network.Types
-                        Pos.Txp.Worker
-
                         -- Update System
                         Pos.Update.Download
                         Pos.Update.Network
                         Pos.Update.Network.Listeners
                         Pos.Update.Worker
-
-  -- Explorer (TODO: move into cardano-explorer)
-  other-modules:        Pos.Binary.Explorer
-                        Pos.Explorer.Core
-                        Pos.Explorer.Core.Types
-                        Pos.Explorer.Txp
-                        Pos.Explorer.Txp.Global
-                        Pos.Explorer.Txp.Local
-                        Pos.Explorer.Txp.Toil
-                        Pos.Explorer.Txp.Toil.Class
-                        Pos.Explorer.Txp.Toil.Logic
-                        Pos.Explorer.Txp.Toil.Types
-                        Pos.Explorer.DB
-                        Pos.Explorer.BListener
 
   build-depends:        MonadRandom
                       , QuickCheck
@@ -340,7 +279,6 @@ library
                       , cardano-report-server >= 0.2.1
                       , cardano-sl-core
                       , cardano-sl-db
-                      , cardano-sl-godtossing
                       , cardano-sl-infra
                       , cardano-sl-lrc
                       , cardano-sl-ssc
@@ -360,9 +298,9 @@ library
                       , dlist
                       , dns
                       , ed25519
-                      , ekg-wai
                       , ekg-core
                       , ekg-statsd
+                      , ekg-wai
                       , ether >= 0.5
                       , exceptions
                       , file-embed >= 0.0.10
@@ -403,12 +341,13 @@ library
                       , reflection
                       , resourcet
                       , rocksdb-haskell >= 1.0.0
-                      , safecopy
                       , safe-exceptions
+                      , safecopy
                       , serokell-util >= 0.1.3.4
                       , servant >= 0.8.1
                       , servant-multipart >= 0.10
                       , servant-server >= 0.8.1
+                      , servant-swagger
                       , stm
                       , stm-containers
                       , string-qq
@@ -444,12 +383,6 @@ library
                        -fno-warn-orphans
                        -O2
 
-  -- linker speed up for linux
-  -- for explorer / wallet linking see https://ghc.haskell.org/trac/ghc/ticket/13810
-  if os(linux) && !flag(with-explorer) && !flag(with-wallet)
-    ghc-options:       -optl-fuse-ld=gold
-    ld-options:        -fuse-ld=gold
-
   default-extensions:   DeriveDataTypeable
                         DeriveGeneric
                         GeneralizedNewtypeDeriving
@@ -472,12 +405,10 @@ library
                         BangPatterns
                         TemplateHaskell
                         ScopedTypeVariables
+                        GADTs
 
   build-tools: cpphs >= 1.19
   ghc-options: -pgmP cpphs -optP --cpp
-
-  if flag(with-explorer)
-    cpp-options: -DWITH_EXPLORER
 
 test-suite cardano-test
   main-is:             Test.hs
@@ -492,10 +423,6 @@ test-suite cardano-test
                        Test.Pos.Block.Identity.BinarySpec
                        Test.Pos.Block.Identity.SafeCopySpec
                        Test.Pos.Block.Logic.CreationSpec
-                       Test.Pos.Block.Logic.Emulation
-                       Test.Pos.Block.Logic.Mode
-                       Test.Pos.Block.Logic.Util
-                       Test.Pos.Block.Logic.Event
                        Test.Pos.Block.Logic.VarSpec
 
                        -- LRC
@@ -504,29 +431,30 @@ test-suite cardano-test
 
                        -- Txp
                        Test.Pos.Client.Txp.Mode
-                       Test.Pos.Client.Txp.Util
                        Test.Pos.Client.Txp.UtilSpec
 
+                       -- Ssc
+                       Test.Pos.Ssc.ComputeSharesSpec
+                       Test.Pos.Ssc.Identity.BinarySpec
+                       Test.Pos.Ssc.Identity.SafeCopySpec
+                       Test.Pos.Ssc.SeedSpec
+                       Test.Pos.Ssc.Toss.BaseSpec
+                       Test.Pos.Ssc.VssCertDataSpec
+
                        -- Everything else
-                       Test.Pos.CborSpec
+                       Test.Pos.Cbor.Canonicity
+                       Test.Pos.Cbor.CborSpec
+                       Test.Pos.Cbor.ReferenceImplementation
                        Test.Pos.Communication.Identity.BinarySpec
-                       Test.Pos.Configuration
                        Test.Pos.ConstantsSpec
                        Test.Pos.Core.AddressSpec
                        Test.Pos.CryptoSpec
                        Test.Pos.Delegation.Identity.BinarySpec
                        Test.Pos.DHT.Identity.BinarySpec
-                       Test.Pos.Explorer.Identity.BinarySpec
                        Test.Pos.Genesis.CanonicalSpec
                        Test.Pos.MerkleSpec
                        Test.Pos.Slotting.TypesSpec
                        Test.Pos.Slotting.BinarySpec
-                       Test.Pos.Ssc.GodTossing.ComputeSharesSpec
-                       Test.Pos.Ssc.GodTossing.Identity.BinarySpec
-                       Test.Pos.Ssc.GodTossing.Identity.SafeCopySpec
-                       Test.Pos.Ssc.GodTossing.SeedSpec
-                       Test.Pos.Ssc.GodTossing.Toss.BaseSpec
-                       Test.Pos.Ssc.GodTossing.VssCertDataSpec
                        Test.Pos.Txp.CoreSpec
                        Test.Pos.Txp.Identity.BinarySpec
                        Test.Pos.Txp.Toil.UtxoSpec
@@ -541,7 +469,7 @@ test-suite cardano-test
                        Test.Pos.Update.Identity.SafeCopySpec
                        Test.Pos.Update.MemStateSpec
                        Test.Pos.Update.PollSpec
-                       Test.Pos.Util
+                       Test.Pos.Helpers
                        Test.Pos.Util.LimitsSpec
                        Test.Pos.Util.ModifierSpec
                        Test.Pos.UtilSpec
@@ -556,7 +484,6 @@ test-suite cardano-test
                      , cardano-sl
                      , cardano-sl-core
                      , cardano-sl-db
-                     , cardano-sl-godtossing
                      , cardano-sl-infra
                      , cardano-sl-lrc
                      , cardano-sl-ssc
@@ -573,6 +500,7 @@ test-suite cardano-test
                      , fmt
                      , formatting
                      , generic-arbitrary
+                     , half
                      , hspec
                      , kademlia
                      , lens
@@ -634,12 +562,10 @@ test-suite cardano-test
                         BangPatterns
                         TemplateHaskell
                         ScopedTypeVariables
+                        GADTs
 
   build-tools: cpphs >= 1.19
   ghc-options: -pgmP cpphs -optP --cpp
-
-  if flag(with-explorer)
-    cpp-options: -DWITH_EXPLORER
 
 benchmark cardano-bench-criterion
   hs-source-dirs:      bench
@@ -655,6 +581,7 @@ benchmark cardano-bench-criterion
                      , bytestring
                      , cardano-sl-core
                      , cardano-sl-txp
+                     , cardano-sl-ssc
                      , cardano-sl
                      , containers
                      , criterion
@@ -699,6 +626,7 @@ benchmark cardano-bench-criterion
                         BangPatterns
                         TemplateHaskell
                         ScopedTypeVariables
+                        GADTs
 
   build-tools: cpphs >= 1.19
   ghc-options: -pgmP cpphs -optP --cpp

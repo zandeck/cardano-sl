@@ -15,6 +15,7 @@ module Pos.Wallet.Web.Api
        , WalletVerb
 
        , TestReset
+       , TestState
 
        , GetWallet
        , GetWallets
@@ -55,9 +56,12 @@ module Pos.Wallet.Web.Api
        , GetSlotsDuration
        , GetVersion
        , GetSyncProgress
+       , LocalTimeDifference
 
        , ImportBackupJSON
        , ExportBackupJSON
+
+       , GetClientInfo
 
        , WalletSwaggerApi
        , swaggerWalletApi
@@ -72,6 +76,7 @@ import           Servant.API                ((:<|>), (:>), Capture, Delete, Get,
                                              ReqBody, Verb)
 import           Servant.Server             (HasServer (..))
 import           Servant.Swagger.UI         (SwaggerSchemaUI)
+import           Servant.API.ContentTypes   (OctetStream)
 import           Universum
 
 import           Pos.Types                  (Coin, SoftwareVersion)
@@ -83,14 +88,15 @@ import           Pos.Util.Servant           (ApiLoggingConfig, CCapture, CQueryP
                                              applyLoggingToHandler, inRouteServer,
                                              serverHandlerL')
 import           Pos.Wallet.Web.ClientTypes (Addr, CAccount, CAccountId, CAccountInit,
-                                             CAccountMeta, CAddress, CCoin, CId,
-                                             CInitialized, CPaperVendWalletRedeem,
+                                             CAccountMeta, CAddress, CCoin, CFilePath, ClientInfo,
+                                             CId, CInitialized, CPaperVendWalletRedeem,
                                              CPassPhrase, CProfile, CTx, CTxId, CTxMeta,
                                              CUpdateInfo, CWallet, CWalletInit,
-                                             CWalletMeta, CWalletRedeem, SyncProgress,
-                                             Wal)
+                                             CWalletMeta, CWalletRedeem, ScrollLimit,
+                                             ScrollOffset, SyncProgress, Wal)
 import           Pos.Wallet.Web.Error       (WalletError (DecodeError),
                                              catchEndpointErrors)
+import           Pos.Wallet.Web.Methods.Misc (WalletStateSnapshot)
 
 -- | Common prefix for all endpoints.
 type ApiPrefix = "api"
@@ -140,6 +146,11 @@ type TestReset =
     :> "reset"
     :> WRes Post ()
 
+type TestState =
+       "test"
+    :> "state"
+    :> Get '[OctetStream] WalletStateSnapshot
+
 -------------------------------------------------------------------------
 -- Wallets
 -------------------------------------------------------------------------
@@ -182,7 +193,7 @@ type ImportWallet =
        "wallets"
     :> "keys"
     :> DCQueryParam "passphrase" CPassPhrase
-    :> ReqBody '[JSON] Text
+    :> ReqBody '[JSON] CFilePath
     :> WRes Post CWallet
 
 type ChangeWalletPassphrase =
@@ -240,7 +251,7 @@ type NewAddress =
 
 type IsValidAddress =
        "addresses"
-    :> Capture "address" Text
+    :> Capture "address" (CId Addr)  -- exact type of 'CId' shouldn't matter
     :> WRes Get Bool
 
 -------------------------------------------------------------------------
@@ -291,8 +302,8 @@ type GetHistory =
     :> QueryParam "walletId" (CId Wal)
     :> CQueryParam "accountId" CAccountId
     :> QueryParam "address" (CId Addr)
-    :> QueryParam "skip" Word
-    :> QueryParam "limit" Word
+    :> QueryParam "skip" ScrollOffset
+    :> QueryParam "limit" ScrollLimit
     :> WRes Get ([CTx], Word)
 
 -------------------------------------------------------------------------
@@ -363,6 +374,12 @@ type GetSyncProgress =
     :> "progress"
     :> WRes Get SyncProgress
 
+type LocalTimeDifference =
+       "settings"
+    :> "time"
+    :> "difference"
+    :> WRes Get Word
+
 -------------------------------------------------------------------------
 -- JSON backup
 -------------------------------------------------------------------------
@@ -370,20 +387,30 @@ type GetSyncProgress =
 type ImportBackupJSON =
        "backup"
     :> "import"
-    :> ReqBody '[JSON] Text
+    :> ReqBody '[JSON] CFilePath
     :> WRes Post CWallet
 
 type ExportBackupJSON =
        "backup"
     :> "export"
     :> Capture "walletId" (CId Wal)
-    :> ReqBody '[JSON] Text
+    :> ReqBody '[JSON] CFilePath
     :> WRes Post ()
+
+-------------------------------------------------------------------------
+-- Settings
+-------------------------------------------------------------------------
+
+type GetClientInfo =
+       "info"
+    :> WRes Get ClientInfo
 
 -- | Servant API which provides access to wallet.
 type WalletApi = ApiPrefix :> (
      -- NOTE: enabled in prod mode https://issues.serokell.io/issue/CSM-333
      TestReset
+    :<|>
+     TestState
     :<|>
      -------------------------------------------------------------------------
      -- Wallets
@@ -475,12 +502,19 @@ type WalletApi = ApiPrefix :> (
     :<|>
      GetSyncProgress
     :<|>
+     LocalTimeDifference
+    :<|>
      -------------------------------------------------------------------------
      -- JSON backup
      -------------------------------------------------------------------------
      ImportBackupJSON
     :<|>
      ExportBackupJSON
+    :<|>
+     -------------------------------------------------------------------------
+     -- Client info: various versions
+     -------------------------------------------------------------------------
+     GetClientInfo
     )
 
 -- | Helper Proxy.

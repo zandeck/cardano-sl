@@ -55,10 +55,10 @@ instance Buildable GenesisExtraBodyData where
 -- necessary. However, it is good idea to store list of leaders
 -- explicitly, because calculating it may be expensive operation. For
 -- example, it is useful for SPV-clients.
-data GenesisBlockchain ssc
+data GenesisBlockchain
 
 -- | Header of Genesis block.
-type GenesisBlockHeader ssc = GenericBlockHeader (GenesisBlockchain ssc)
+type GenesisBlockHeader = GenericBlockHeader GenesisBlockchain
 
 -- | Genesis block parametrized by 'GenesisBlockchain'.
-type GenesisBlock ssc = GenericBlock (GenesisBlockchain ssc)
+type GenesisBlock = GenericBlock GenesisBlockchain

@@ -9,8 +9,6 @@ module Pos.Worker
 
 import           Universum
 
-import           Data.Tagged             (untag)
-
 import           Pos.Block.Worker        (blkWorkers)
 import           Pos.Communication       (OutSpecs, Relay, WorkerSpec, localWorker,
                                           relayPropagateOut, wrapActionSpec)
@@ -22,24 +20,23 @@ import           Pos.Network.Types       (NetworkConfig (..), SubscriptionWorker
                                           topologyRunKademlia, topologySubscriptionWorker)
 import           Pos.Security.Workers    (securityWorkers)
 import           Pos.Slotting            (logNewSlotWorker, slottingWorkers)
-import           Pos.Ssc.Class           (SscListenersClass (sscRelays),
-                                          SscWorkersClass (sscWorkers))
+import           Pos.Ssc                 (sscRelays)
+import           Pos.Ssc.Worker          (sscWorkers)
 import           Pos.Subscription.Common (subscriptionWorker)
 import           Pos.Subscription.Dht    (dhtSubscriptionWorker)
 import           Pos.Subscription.Dns    (dnsSubscriptionWorker)
 import           Pos.Txp                 (txRelays)
-import           Pos.Txp.Worker          (txpWorkers)
 import           Pos.Update              (usRelays, usWorkers)
 import           Pos.Util                (mconcatPair)
+import           Pos.Util.JsonLog        (JLEvent (JLTxReceived))
+import           Pos.Util.TimeWarp       (jsonLog)
 import           Pos.WorkMode            (WorkMode)
 
 -- | All, but in reality not all, workers used by full node.
 allWorkers
-    :: forall ssc ctx m .
-       ( SscListenersClass ssc
-       , WorkMode ssc ctx m
-       )
-    => NodeResources ssc m -> ([WorkerSpec m], OutSpecs)
+    :: forall ext ctx m .
+       WorkMode ctx m
+    => NodeResources ext m -> ([WorkerSpec m], OutSpecs)
 allWorkers NodeResources {..} = mconcatPair
     [
       -- Only workers of "onNewSlot" type
@@ -50,14 +47,14 @@ allWorkers NodeResources {..} = mconcatPair
     , wrap' "us"         $ usWorkers
 
       -- Have custom loggers
-    , wrap' "block"      $ blkWorkers
-    , wrap' "txp"        $ txpWorkers
+    , wrap' "block"      $ blkWorkers ncSubscriptionKeepAliveTimer
     , wrap' "delegation" $ dlgWorkers
     , wrap' "slotting"   $ (properSlottingWorkers, mempty)
 
     , wrap' "subscription" $ case topologySubscriptionWorker (ncTopology ncNetworkConfig) of
         Just (SubscriptionWorkerBehindNAT dnsDomains) ->
-          subscriptionWorker (dnsSubscriptionWorker ncNetworkConfig dnsDomains)
+          subscriptionWorker (dnsSubscriptionWorker ncNetworkConfig dnsDomains
+                                                    ncSubscriptionKeepAliveTimer)
         Just (SubscriptionWorkerKademlia kinst nodeType valency fallbacks) ->
           subscriptionWorker (dhtSubscriptionWorker kinst nodeType valency fallbacks)
         Nothing ->
@@ -66,7 +63,7 @@ allWorkers NodeResources {..} = mconcatPair
       -- MAGIC "relay" out specs.
       -- There's no cardano-sl worker for them; they're put out by the outbound
       -- queue system from time-warp (enqueueConversation on SendActions).
-    , ([], relayPropagateOut (mconcat [delegationRelays, untag sscRelays, txRelays, usRelays] :: [Relay m]))
+    , ([], relayPropagateOut (mconcat [delegationRelays, sscRelays, txRelays logTx, usRelays] :: [Relay m]))
 
       -- Kademlia has some workers to run.
       --
@@ -83,3 +80,4 @@ allWorkers NodeResources {..} = mconcatPair
        fst (localWorker logNewSlotWorker) :
        map (fst . localWorker) (slottingWorkers ncSlottingContext)
     wrap' lname = first (map $ wrapActionSpec $ "worker" <> lname)
+    logTx = jsonLog . JLTxReceived

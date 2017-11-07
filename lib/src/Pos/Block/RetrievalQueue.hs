@@ -1,3 +1,4 @@
+-- | Block retrieval queue with accompanied datatypes.
 module Pos.Block.RetrievalQueue
        ( BlockRetrievalQueueTag
        , BlockRetrievalQueue
@@ -11,11 +12,16 @@ import           Control.Concurrent.STM  (TBQueue)
 import           Pos.Block.Core          (BlockHeader)
 import           Pos.Communication.Types (NodeId)
 
-data BlockRetrievalTask ssc = BlockRetrievalTask
-    { brtHeader    :: !(BlockHeader ssc)
+-- | Task that block retrieval queue is asked to do.
+data BlockRetrievalTask = BlockRetrievalTask
+    { brtHeader    :: !BlockHeader
+      -- ^ Header we're insterested in.
     , brtContinues :: !Bool
+      -- ^ If it was tentatively classified as "direct continuation of
+      -- our chain".
     }
 
 data BlockRetrievalQueueTag
 
-type BlockRetrievalQueue ssc = TBQueue (NodeId, BlockRetrievalTask ssc)
+-- | Queue types.
+type BlockRetrievalQueue = TBQueue (NodeId, BlockRetrievalTask)

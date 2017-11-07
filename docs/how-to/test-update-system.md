@@ -50,13 +50,13 @@ stack exec -- cardano-auxx --system-start 0 --log-config log-config-prod.yaml --
 
 Then you will appear in `repl` mode and would need to perform few actions:
 
-#### Import keys
+#### Import secret keys
 
 ```
-add-key nodes2/testnet1.key
-add-key nodes2/testnet2.key
-add-key nodes2/testnet3.key
-add-key nodes2/testnet4.key
+add-key nodes2/testnet1.key primary
+add-key nodes2/testnet2.key primary
+add-key nodes2/testnet3.key primary
+add-key nodes2/testnet4.key primary
 ```
 
 Then if you execute
@@ -79,20 +79,21 @@ Available addresses:
 #### Propose update
 
 ```
-propose-update 0 0.1.0 1 15 2000000 csl-daedalus:1 win64 daedalus1.exe none macos daedalus1c.pkg none
+propose-update 0 0.1.0 csl-daedalus:1 1 15 2000000 win64 daedalus1.exe none macos daedalus1c.pkg none
 ```
+
 (`none` states for binary diff package)
 
-Replace second argument, `0.1.0`, with actual block version from config (i.e. `lastKnownBVMajor.lastKnownBVMinor.lastKnownBVAlt`), if needed.
-
-Replace third argument, `1` with actual script version.
+Replace `0.1.0` with actual block version from config (i.e. `lastKnownBVMajor.lastKnownBVMinor.lastKnownBVAlt`), if needed.
 
 Replace `csl-daedalus:1` with `applicationName:applicationVersion` as for config.
+
+Replace argument 4, `1` with actual script version.
 
 After launching `propose-update` command you'll see output like this:
 
 ```
-> propose-update 0 0.1.0 1 15 2000000 csl-daedalus:1 win64 daedalus1.exe none macos daedalus1c.pkg none
+> propose-update 0 0.1.0 csl-daedalus:1 1 15 2000000 win64 daedalus1.exe none macos daedalus1c.pkg none
 [smart-wallet:DEBUG:ThreadId 10] [2017-09-01 15:13:07 MSK] Proposing update...
 Read file daedalus1.exe succesfuly, its hash: 77de53da248fa85143f45ca8a3f83ef7088395222b25ea777859e4209cff1ceb
 Read file daedalus1c.pkg succesfuly, its hash: f53b7e9e024eeb6d96116764b4bedd756e9b5f5fccb07beac27cc9c197cd593c
@@ -126,7 +127,7 @@ In blockchain should be:
 44002     software: cardano-sl:0
 44003   transactions (0 items): []
 44004   proxy signing keys (0 items): []
-44005     no GodTossing payload
+44005     no SSC payload
 44006   update payload: csl-daedalus:1 { block v0.1.0, UpId: f3fe3a62, { scripts v1, slot duration: 15000 mcs, block size limit: 1.907 MiB, header size limit: 195.313 KiB, tx size limit: 4 KiB, proposal size           limit: 700 B, mpc threshold: 20000000000000/1000000000000000 (approx. 0.02), heavyweight delegation threshold: 300000000000/1000000000000000 (approx. 0.0003), update vote threshold: 1000000000000/                1000000000000000 (approx. 0.001), update proposal threshold: 100000000000000/1000000000000000 (approx. 0.1), update implicit period: 10000 slots, no softfork rule, no tx fee policy, unlock stake epoch:  },       tags: [win64], no attributes } 
 44007     votes: [(c9a26b08 for f3fe3a62)]
 44008   no extra data
@@ -169,7 +170,7 @@ MainBlock:
     software: cardano-sl:0
   transactions (0 items): []
   proxy signing keys (0 items): []
-    no GodTossing payload
+    no SSC payload
   update payload: no proposal
     votes: [(18e62bbf for f3fe3a62)]
   no extra data

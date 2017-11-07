@@ -10,7 +10,7 @@ import           Universum
 import qualified Data.Text.Buildable               as Buildable
 import           Formatting                        (bprint, build, (%))
 import qualified Prelude
-import           System.Random                     (mkStdGen, randomR)
+import           System.Random                     (Random, mkStdGen, randomR)
 import           Test.QuickCheck                   (Arbitrary (..), Gen, choose, suchThat,
                                                     vectorOf)
 import           Test.QuickCheck.Arbitrary.Generic (genericArbitrary, genericShrink)
@@ -28,7 +28,7 @@ import qualified Pos.Core                          as Core
 import           Pos.Crypto                        (ProxySecretKey, PublicKey, SecretKey,
                                                     createPsk, hash, toPublic)
 import           Pos.Data.Attributes               (areAttributesKnown)
-import           Pos.Ssc.Class                     (Ssc (..), SscHelpersClass)
+import           Pos.Ssc.Core                      (SscPayload, SscProof)
 import qualified Pos.Types                         as T
 import           Pos.Util.Arbitrary                (makeSmall)
 import           Pos.Util.Util                     (leftToPanic)
@@ -41,8 +41,8 @@ newtype BodyDependsOnSlot b = BodyDependsOnSlot
 -- Arbitrary instances for Blockchain related types
 ------------------------------------------------------------------------------------------
 
-instance (HasConfiguration, Arbitrary (SscProof ssc), Ssc ssc) =>
-    Arbitrary (T.BlockSignature ssc) where
+instance (HasConfiguration, Arbitrary SscProof) =>
+    Arbitrary T.BlockSignature where
     arbitrary = genericArbitrary
     shrink = genericShrink
 
@@ -58,31 +58,30 @@ instance Arbitrary T.GenesisExtraBodyData where
     arbitrary = genericArbitrary
     shrink = genericShrink
 
-instance Arbitrary (T.GenesisBlockHeader ssc) where
+instance Arbitrary T.GenesisBlockHeader where
     arbitrary = genericArbitrary
     shrink = genericShrink
 
-instance Arbitrary (T.BodyProof (T.GenesisBlockchain ssc)) where
+instance Arbitrary (T.BodyProof T.GenesisBlockchain) where
     arbitrary = genericArbitrary
     shrink = genericShrink
 
-instance Arbitrary (T.ConsensusData (T.GenesisBlockchain ssc)) where
+instance Arbitrary (T.ConsensusData T.GenesisBlockchain) where
     arbitrary = genericArbitrary
     shrink = genericShrink
 
-instance Arbitrary (BodyDependsOnSlot (T.GenesisBlockchain ssc)) where
+instance Arbitrary (BodyDependsOnSlot T.GenesisBlockchain) where
     arbitrary = pure $ BodyDependsOnSlot $ \_ -> arbitrary
 
-instance Arbitrary (T.Body (T.GenesisBlockchain ssc)) where
+instance Arbitrary (T.Body T.GenesisBlockchain) where
     arbitrary = genericArbitrary
     shrink = genericShrink
 
-instance ( Arbitrary $ SscProof ssc
-         , Arbitrary $ SscPayload ssc
-         , SscHelpersClass ssc
+instance ( Arbitrary SscProof
+         , Arbitrary SscPayload
          , HasConfiguration
          ) =>
-         Arbitrary (T.GenericBlock (T.GenesisBlockchain ssc)) where
+         Arbitrary T.GenesisBlock where
     arbitrary = T.mkGenesisBlock <$> arbitrary <*> arbitrary <*> arbitrary
     shrink = genericShrink
 
@@ -90,13 +89,12 @@ instance ( Arbitrary $ SscProof ssc
 -- MainBlockchain
 ------------------------------------------------------------------------------------------
 
-instance ( Arbitrary (SscPayload ssc)
-         , Arbitrary (SscProof ssc)
+instance ( Arbitrary SscPayload
+         , Arbitrary SscProof
          , Bi Raw
-         , SscHelpersClass ssc
          , HasConfiguration
          ) =>
-         Arbitrary (T.MainBlockHeader ssc) where
+         Arbitrary T.MainBlockHeader where
     arbitrary =
         T.mkMainHeader <$> arbitrary <*> arbitrary <*> arbitrary <*>
         -- TODO: do not hardcode Nothing
@@ -113,8 +111,8 @@ instance Arbitrary T.MainExtraBodyData where
     arbitrary = genericArbitrary
     shrink = genericShrink
 
-instance (HasConfiguration, Arbitrary (SscProof ssc)) =>
-    Arbitrary (T.BodyProof (T.MainBlockchain ssc)) where
+instance (HasConfiguration, Arbitrary SscProof) =>
+    Arbitrary (T.BodyProof T.MainBlockchain) where
     arbitrary = genericArbitrary
     shrink T.MainProof {..} =
         [T.MainProof txp mpcp prxp updp
@@ -122,12 +120,12 @@ instance (HasConfiguration, Arbitrary (SscProof ssc)) =>
             shrink (mpTxProof, mpMpcProof, mpProxySKsProof, mpUpdateProof)
         ]
 
-instance (HasConfiguration, Arbitrary (SscProof ssc), Ssc ssc) =>
-    Arbitrary (T.ConsensusData (T.MainBlockchain ssc)) where
+instance (HasConfiguration, Arbitrary SscProof) =>
+    Arbitrary (T.ConsensusData T.MainBlockchain) where
     arbitrary = genericArbitrary
     shrink = genericShrink
 
-instance (HasConfiguration, Arbitrary (SscProof ssc)) => Arbitrary (T.MainToSign ssc) where
+instance (HasConfiguration, Arbitrary SscProof) => Arbitrary T.MainToSign where
     arbitrary = genericArbitrary
     shrink = genericShrink
 
@@ -138,25 +136,25 @@ instance (HasConfiguration, Arbitrary (SscProof ssc)) => Arbitrary (T.MainToSign
 -- its output list must be the same as the length of the i-th item in the
 -- TxDistribution list.
 --
--- Because of this, the Arbitrary instance for Ssc ssc => Body
--- (MainBlockchain ssc) ensures that for every transaction generated, a
+-- Because of this, the Arbitrary instance for @Body
+-- MainBlockchain@ ensures that for every transaction generated, a
 -- transaction witness is generated as well, and the lengths of its list of
 -- outputs must also be the same as the length of its corresponding
 -- TxDistribution item.
 
 {-# ANN module ("HLint: ignore Reduce duplication" :: Text) #-}
 
-instance (HasConfiguration, Arbitrary (SscPayloadDependsOnSlot ssc)) =>
-         Arbitrary (BodyDependsOnSlot (T.MainBlockchain ssc)) where
+instance (HasConfiguration, Arbitrary SscPayloadDependsOnSlot) =>
+         Arbitrary (BodyDependsOnSlot T.MainBlockchain) where
     arbitrary = pure $ BodyDependsOnSlot $ \slotId -> makeSmall $ do
         txPayload   <- arbitrary
-        generator   <- genPayloadDependsOnSlot @ssc <$> arbitrary
+        generator   <- genPayloadDependsOnSlot <$> arbitrary
         mpcData     <- generator slotId
         dlgPayload  <- genDlgPayload $ Core.siEpoch slotId
         mpcUpload   <- arbitrary
         return $ T.MainBody txPayload mpcData dlgPayload mpcUpload
 
-instance (HasConfiguration, Arbitrary (SscPayload ssc)) => Arbitrary (T.Body (T.MainBlockchain ssc)) where
+instance (HasConfiguration, Arbitrary SscPayload) => Arbitrary (T.Body T.MainBlockchain) where
     arbitrary = makeSmall genericArbitrary
     shrink mb =
         [ T.MainBody txp sscp dlgp updp
@@ -167,13 +165,12 @@ instance (HasConfiguration, Arbitrary (SscPayload ssc)) => Arbitrary (T.Body (T.
                     mb ^. T.mbUpdatePayload)
         ]
 
-instance ( Arbitrary $ SscPayload ssc
-         , Arbitrary $ SscProof ssc
-         , Arbitrary $ SscPayloadDependsOnSlot ssc
-         , SscHelpersClass ssc
+instance ( Arbitrary SscPayload
+         , Arbitrary SscProof
+         , Arbitrary SscPayloadDependsOnSlot
          , HasConfiguration
          ) =>
-         Arbitrary (T.GenericBlock (T.MainBlockchain ssc)) where
+         Arbitrary T.MainBlock where
     arbitrary = do
         slot <- arbitrary
         BodyDependsOnSlot {..} <- arbitrary
@@ -205,33 +202,36 @@ instance Arbitrary T.MsgGetBlocks where
     arbitrary = genericArbitrary
     shrink = genericShrink
 
-instance (Arbitrary (SscPayload ssc), Arbitrary (SscProof ssc), Bi Raw, SscHelpersClass ssc, HasConfiguration) =>
-         Arbitrary (T.MsgHeaders ssc) where
-    arbitrary = genericArbitrary
-    shrink = genericShrink
-
-instance ( Arbitrary $ SscPayload ssc
-         , Arbitrary (SscProof ssc)
-         , Arbitrary (SscPayloadDependsOnSlot ssc)
-         , SscHelpersClass ssc
+instance ( Arbitrary SscPayload
+         , Arbitrary SscProof
+         , Bi Raw
          , HasConfiguration
          ) =>
-         Arbitrary (T.MsgBlock ssc) where
+         Arbitrary T.MsgHeaders where
     arbitrary = genericArbitrary
     shrink = genericShrink
 
-instance T.BiSsc ssc => Buildable (T.BlockHeader ssc, PublicKey) where
+instance ( Arbitrary SscPayload
+         , Arbitrary SscProof
+         , Arbitrary SscPayloadDependsOnSlot
+         , HasConfiguration
+         ) =>
+         Arbitrary T.MsgBlock where
+    arbitrary = genericArbitrary
+    shrink = genericShrink
+
+instance Buildable T.BlockHeader => Buildable (T.BlockHeader, PublicKey) where
     build (block, key) =
         bprint
             ( build%"\n"%
               build%"\n"
             ) block key
 
-newtype BlockHeaderList ssc = BHL
-    { getHeaderList :: ([T.BlockHeader ssc], [PublicKey])
+newtype BlockHeaderList = BHL
+    { getHeaderList :: ([T.BlockHeader], [PublicKey])
     } deriving (Eq)
 
-instance T.BiSsc ssc => Show (BlockHeaderList ssc) where
+instance Buildable T.BlockHeader => Show BlockHeaderList where
     show = toString . unlines . map pretty . uncurry zip . getHeaderList
 
 -- | Generation of arbitrary, valid headerchain along with a list of leaders
@@ -255,12 +255,14 @@ instance T.BiSsc ssc => Show (BlockHeaderList ssc) where
 --   * if an epoch is `n` slots long, every `n+1`-th block will be of the
 --     genesis kind.
 recursiveHeaderGen
-    :: (Arbitrary (SscPayload ssc), SscHelpersClass ssc, HasConfiguration)
+    :: ( Arbitrary SscPayload
+       , HasConfiguration
+       )
     => Bool -- ^ Whether to create genesis block before creating main block for 0th slot
     -> [Either SecretKey (SecretKey, SecretKey, Bool)]
     -> [T.SlotId]
-    -> [T.BlockHeader ssc]
-    -> Gen [T.BlockHeader ssc]
+    -> [T.BlockHeader]
+    -> Gen [T.BlockHeader]
 recursiveHeaderGen genesis
                    (eitherOfLeader : leaders)
                    (T.SlotId{..} : rest)
@@ -325,20 +327,24 @@ bhlEpochs = 2
 --
 -- Note that a leader is generated for each slot.
 -- (Not exactly a leader - see previous comment)
-instance (Arbitrary (SscPayload ssc), SscHelpersClass ssc, HasConfiguration) =>
-         Arbitrary (BlockHeaderList ssc) where
+instance ( Arbitrary SscPayload
+         , HasConfiguration
+         ) =>
+         Arbitrary BlockHeaderList where
     arbitrary = do
         incompleteEpochSize <- choose (1, epochSlots - 1)
         let slot = T.SlotId 0 minBound
         generateBHL True slot (epochSlots * bhlEpochs + incompleteEpochSize)
 
 generateBHL
-    :: (Arbitrary (SscPayload ssc), SscHelpersClass ssc, HasConfiguration)
+    :: ( Arbitrary SscPayload
+       , HasConfiguration
+       )
     => Bool         -- ^ Whether to create genesis block before creating main
                     --    block for 0th slot
     -> T.SlotId     -- ^ Start slot
     -> T.SlotCount  -- ^ Slot count
-    -> Gen (BlockHeaderList ssc)
+    -> Gen BlockHeaderList
 generateBHL createInitGenesis startSlot slotCount = BHL <$> do
     let correctLeaderGen :: Gen (Either SecretKey (SecretKey, SecretKey, Bool))
         correctLeaderGen =
@@ -363,16 +369,16 @@ generateBHL createInitGenesis startSlot slotCount = BHL <$> do
 -- 'Pos.Types.Blocks.Functions.verifyHeader', the blockheaders that may be
 -- part of the verification parameters are guaranteed to be valid, as are the
 -- slot leaders and the current slot.
-newtype HeaderAndParams ssc = HAndP
-    { getHAndP :: (T.VerifyHeaderParams ssc, T.BlockHeader ssc)
+newtype HeaderAndParams = HAndP
+    { getHAndP :: (T.VerifyHeaderParams, T.BlockHeader)
     } deriving (Eq, Show)
 
 -- | A lot of the work to generate a valid sequence of blockheaders has
 -- already been done in the 'Arbitrary' instance of the 'BlockHeaderList'
 -- type, so it is used here and at most 3 blocks are taken from the generated
 -- list.
-instance (Arbitrary (SscPayload ssc), SscHelpersClass ssc, HasConfiguration) =>
-    Arbitrary (HeaderAndParams ssc) where
+instance (Arbitrary SscPayload, HasConfiguration) =>
+    Arbitrary HeaderAndParams where
     arbitrary = do
         -- This integer is used as a seed to randomly choose a slot down below
         seed <- arbitrary :: Gen Int
@@ -396,6 +402,7 @@ instance (Arbitrary (SscPayload ssc), SscHelpersClass ssc, HasConfiguration) =>
             thisHeadersEpoch = drop thisEpochStartIndex leaders
             -- A helper function. Given integers 'x' and 'y', it chooses a
             -- random integer in the interval [x, y]
+            betweenXAndY :: Random a => a -> a -> a
             betweenXAndY x y = fst . randomR (x, y) . mkStdGen $ seed
             -- One of the fields in the 'VerifyHeaderParams' type is 'Just
             -- SlotId'. The following binding is where it is calculated.

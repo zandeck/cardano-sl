@@ -65,16 +65,16 @@ import           Pos.Block.Types                  (Blund)
 import           Pos.Core                         (GenesisWStakeholders, HasConfiguration,
                                                    HeaderHash, headerHash, prevBlockL)
 import           Pos.Crypto.Hashing               (hashHexF)
-import           Pos.Generator.Block              (BlockGenParams (..), MonadBlockGen,
-                                                   TxGenParams (..), genBlocks)
+import           Pos.Generator.Block              (BlockGenParams (..), BlockTxpGenMode,
+                                                   MonadBlockGen, TxGenParams (..),
+                                                   genBlocks)
 import           Pos.GState.Context               (withClonedGState)
-import           Pos.Ssc.GodTossing.Configuration (HasGtConfiguration)
-import           Pos.Ssc.GodTossing.Type          (SscGodTossing)
+import           Pos.Ssc.Configuration            (HasSscConfiguration)
+import           Pos.Txp                          (TxpGlobalSettings)
 import           Pos.Util.Chrono                  (NE, NewestFirst (..), OldestFirst (..),
                                                    toNewestFirst, toOldestFirst,
                                                    _OldestFirst)
-
-type BlundDefault = Blund SscGodTossing
+import           Pos.Util.Util                    (lensOf')
 
 ----------------------------------------------------------------------------
 -- Blockchain tree
@@ -158,25 +158,25 @@ flattenBlockchainTree prePath tree = do
     let BlockchainTree a forest = tree
     (prePath, a) : flattenBlockchainForest prePath forest
 
-genBlocksInForest ::
-       (MonadBlockGen ctx m, RandomGen g)
+genBlocksInForest
+    :: BlockTxpGenMode g ctx m
     => AllSecrets
     -> GenesisWStakeholders
     -> BlockchainForest BlockDesc
-    -> RandT g m (BlockchainForest BlundDefault)
+    -> RandT g m (BlockchainForest Blund)
 genBlocksInForest secrets bootStakeholders =
     traverse $ mapRandT withClonedGState .
     genBlocksInTree secrets bootStakeholders
 
-genBlocksInTree ::
-       (MonadBlockGen ctx m, RandomGen g)
+genBlocksInTree
+    :: BlockTxpGenMode g ctx m
     => AllSecrets
     -> GenesisWStakeholders
     -> BlockchainTree BlockDesc
-    -> RandT g m (BlockchainTree BlundDefault)
+    -> RandT g m (BlockchainTree Blund)
 genBlocksInTree secrets bootStakeholders blockchainTree = do
-    let
-        BlockchainTree blockDesc blockchainForest = blockchainTree
+    txpSettings <- view (lensOf' @TxpGlobalSettings)
+    let BlockchainTree blockDesc blockchainForest = blockchainTree
         txGenParams = case blockDesc of
             BlockDescDefault  -> TxGenParams (0, 0) 0
             BlockDescCustom p -> p
@@ -187,23 +187,21 @@ genBlocksInTree secrets bootStakeholders blockchainTree = do
             , _bgpTxGenParams     = txGenParams
             , _bgpInplaceDB       = True
             , _bgpSkipNoKey       = False
+            , _bgpTxpGlobalSettings = txpSettings
             }
-    -- Partial pattern-matching is safe because we specify
-    -- blockCount = 1 in the generation parameters.
-    OldestFirst [block] <- genBlocks blockGenParams
+    [block] <- genBlocks blockGenParams maybeToList
     forestBlocks <- genBlocksInForest secrets bootStakeholders blockchainForest
     return $ BlockchainTree block forestBlocks
 
 -- Precondition: paths in the structure are non-empty.
 genBlocksInStructure ::
-       ( MonadBlockGen ctx m
-       , Functor t, Foldable t
-       , RandomGen g )
+       ( BlockTxpGenMode g ctx m
+       , Functor t, Foldable t)
     => AllSecrets
     -> GenesisWStakeholders
     -> Map Path BlockDesc
     -> t Path
-    -> RandT g m (t BlundDefault)
+    -> RandT g m (t Blund)
 genBlocksInStructure secrets bootStakeholders annotations s = do
     let
         getAnnotation :: Path -> BlockDesc
@@ -213,10 +211,10 @@ genBlocksInStructure secrets bootStakeholders annotations s = do
         paths = toListOf (folded . to (\path -> (path, getAnnotation path))) s
         descForest :: BlockchainForest BlockDesc
         descForest = buildBlockchainForest BlockDescDefault paths
-    blockForest :: BlockchainForest BlundDefault <-
+    blockForest :: BlockchainForest Blund <-
         genBlocksInForest secrets bootStakeholders descForest
     let
-        getBlock :: Path -> BlundDefault
+        getBlock :: Path -> Blund
         getBlock path = Map.findWithDefault
             (error "genBlocksInStructure: impossible happened")
             path
@@ -242,7 +240,7 @@ data BlockEventApply' blund = BlockEventApply
 
 makeLenses ''BlockEventApply'
 
-type BlockEventApply = BlockEventApply' BlundDefault
+type BlockEventApply = BlockEventApply' Blund
 
 -- | The type of failure that we expect from a rollback.
 -- Extend this data type as necessary if you need to check for
@@ -263,7 +261,7 @@ data BlockEventRollback' blund = BlockEventRollback
 
 makeLenses ''BlockEventRollback'
 
-type BlockEventRollback = BlockEventRollback' BlundDefault
+type BlockEventRollback = BlockEventRollback' Blund
 
 newtype SnapshotId = SnapshotId Text
     deriving (Eq, Ord, IsString)
@@ -297,7 +295,7 @@ instance Buildable blund => Buildable (BlockEvent' blund) where
         BlkEvRollback ev -> bprint ("Rollback blocks: "%listJson) (getNewestFirst $ ev ^. berInput)
         BlkEvSnap s -> bprint build s
 
-type BlockEvent = BlockEvent' BlundDefault
+type BlockEvent = BlockEvent' Blund
 
 newtype BlockScenario' blund = BlockScenario [BlockEvent' blund]
     deriving (Show, Functor, Foldable)
@@ -305,7 +303,7 @@ newtype BlockScenario' blund = BlockScenario [BlockEvent' blund]
 instance Buildable blund => Buildable (BlockScenario' blund) where
     build (BlockScenario xs) = bprint listJson xs
 
-type BlockScenario = BlockScenario' BlundDefault
+type BlockScenario = BlockScenario' Blund
 
 makePrisms ''BlockScenario'
 
@@ -330,7 +328,7 @@ newtype CheckCount = CheckCount Word
     deriving (Eq, Ord, Show, Num)
 
 -- The tip after the block event. 'Nothing' when the event doesn't affect the tip.
-blkEvTip :: (HasConfiguration, HasGtConfiguration) => BlockEvent -> Maybe HeaderHash
+blkEvTip :: (HasConfiguration, HasSscConfiguration) => BlockEvent -> Maybe HeaderHash
 blkEvTip = \case
     BlkEvApply bea -> Just $
         (headerHash . NE.head . getNewestFirst . toNewestFirst . view beaInput) bea
@@ -348,7 +346,7 @@ hhSnapshotId = SnapshotId . sformat hashHexF
 
 -- | Whenever the resulting tips of apply/rollback operations coincide,
 -- add a snapshot equivalence comparison.
-enrichWithSnapshotChecking :: (HasConfiguration, HasGtConfiguration) => BlockScenario -> (BlockScenario, CheckCount)
+enrichWithSnapshotChecking :: (HasConfiguration, HasSscConfiguration) => BlockScenario -> (BlockScenario, CheckCount)
 enrichWithSnapshotChecking (BlockScenario bs) = (BlockScenario bs', checkCount)
   where
     checkCount = sum (hhStatusEnd :: HhStatusMap)

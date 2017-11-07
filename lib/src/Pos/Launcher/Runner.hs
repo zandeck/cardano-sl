@@ -1,6 +1,6 @@
-{-# LANGUAGE CPP        #-}
-{-# LANGUAGE GADTs      #-}
-{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE AllowAmbiguousTypes #-}
+{-# LANGUAGE CPP                 #-}
+{-# LANGUAGE RankNTypes          #-}
 
 -- | Runners in various modes.
 
@@ -16,11 +16,12 @@ module Pos.Launcher.Runner
        , initQueue
        ) where
 
-import qualified Data.Map                        as M
 import           Universum                       hiding (bracket)
 
 import           Control.Monad.Fix               (MonadFix)
 import qualified Control.Monad.Reader            as Mtl
+import           Data.Default                    (Default)
+import qualified Data.Map                        as M
 import           Formatting                      (build, sformat, (%))
 import           Mockable                        (Mockable, MonadMockable,
                                                   Production (..), Throw, async, bracket,
@@ -29,8 +30,8 @@ import qualified Network.Broadcast.OutboundQueue as OQ
 import           Node                            (Node, NodeAction (..), NodeEndPoint,
                                                   ReceiveDelay, Statistics,
                                                   defaultNodeEnvironment, noReceiveDelay,
-                                                  node, simpleNodeEndPoint,
-                                                  nodeAckTimeout)
+                                                  node, nodeAckTimeout,
+                                                  simpleNodeEndPoint)
 import qualified Node.Conversation               as N (Conversation, Converse,
                                                        converseWith)
 import           Node.Util.Monitor               (registerMetrics)
@@ -49,7 +50,8 @@ import           Pos.Communication               (ActionSpec (..), EnqueueMsg,
                                                   SendActions, VerInfo (..), allListeners,
                                                   bipPacking, hoistSendActions,
                                                   makeEnqueueMsg, makeSendActions)
-import           Pos.Configuration               (HasNodeConfiguration, conversationEstablishTimeout)
+import           Pos.Configuration               (HasNodeConfiguration,
+                                                  conversationEstablishTimeout)
 import           Pos.Context                     (NodeContext (..))
 import           Pos.Core.Configuration          (HasConfiguration, protocolMagic)
 import           Pos.Core.Types                  (ProtocolMagic (..))
@@ -60,8 +62,9 @@ import           Pos.Launcher.Resource           (NodeResources (..), hoistNodeR
 import           Pos.Network.Types               (NetworkConfig (..), NodeId, initQueue,
                                                   topologyRoute53HealthCheckEnabled)
 import           Pos.Recovery.Instance           ()
-import           Pos.Ssc.Class                   (SscConstraint)
+import           Pos.Ssc                         (HasSscConfiguration)
 import           Pos.Statistics                  (EkgParams (..), StatsdParams (..))
+import           Pos.Txp                         (MonadTxpLocal)
 import           Pos.Update.Configuration        (HasUpdateConfiguration,
                                                   lastKnownBlockVersion)
 import           Pos.Util.CompileInfo            (HasCompileInfo)
@@ -78,20 +81,28 @@ import           Pos.WorkMode                    (EnqueuedConversation (..), OQ,
 
 -- | Run activity in 'RealMode'.
 runRealMode
-    :: forall ssc ctx a.
-       (SscConstraint ssc, WorkMode ssc ctx (RealMode ssc))
-    => NodeResources ssc (RealMode ssc)
-    -> (ActionSpec (RealMode ssc) a, OutSpecs)
+    :: forall ext ctx a.
+       (HasCompileInfo, WorkMode ctx (RealMode ext))
+    => NodeResources ext (RealMode ext)
+    -> (ActionSpec (RealMode ext) a, OutSpecs)
     -> Production a
-runRealMode = runRealBasedMode identity identity
+runRealMode = runRealBasedMode @ext @ctx identity identity
 
 -- | Run activity in something convertible to 'RealMode' and back.
 runRealBasedMode
-    :: forall ssc ctx m a.
-       (SscConstraint ssc, WorkMode ssc ctx m)
-    => (forall b. m b -> RealMode ssc b)
-    -> (forall b. RealMode ssc b -> m b)
-    -> NodeResources ssc m
+    :: forall ext ctx m a.
+       ( HasCompileInfo
+       , WorkMode ctx m
+       , Default ext
+       , MonadTxpLocal (RealMode ext)
+       -- MonadTxpLocal is meh,
+       -- we can't remove @ext@ from @RealMode@ because
+       -- explorer and wallet use RealMode,
+       -- though they should use only @RealModeContext@
+       )
+    => (forall b. m b -> RealMode ext b)
+    -> (forall b. RealMode ext b -> m b)
+    -> NodeResources ext m
     -> (ActionSpec m a, OutSpecs)
     -> Production a
 runRealBasedMode unwrap wrap nr@NodeResources {..} (ActionSpec action, outSpecs) =
@@ -101,17 +112,19 @@ runRealBasedMode unwrap wrap nr@NodeResources {..} (ActionSpec action, outSpecs)
 
 -- | RealMode runner.
 runRealModeDo
-    :: forall ssc a.
+    :: forall ext a.
        ( HasConfiguration
        , HasInfraConfiguration
        , HasUpdateConfiguration
        , HasNodeConfiguration
+       , HasSscConfiguration
        , HasCompileInfo
-       , SscConstraint ssc
+       , Default ext
+       , MonadTxpLocal (RealMode ext)
        )
-    => NodeResources ssc (RealMode ssc)
+    => NodeResources ext (RealMode ext)
     -> OutSpecs
-    -> ActionSpec (RealMode ssc) a
+    -> ActionSpec (RealMode ext) a
     -> Production a
 runRealModeDo NodeResources {..} outSpecs action =
     do
@@ -179,8 +192,8 @@ runRealModeDo NodeResources {..} outSpecs action =
 
     runToProd :: forall t .
                  JsonLogConfig
-              -> OQ (RealMode ssc)
-              -> RealMode ssc t
+              -> OQ (RealMode ext)
+              -> RealMode ext t
               -> Production t
     runToProd jlConf oq act = Mtl.runReaderT act $
         RealModeContext

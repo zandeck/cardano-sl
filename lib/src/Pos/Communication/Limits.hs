@@ -26,7 +26,8 @@ import           Pos.Block.Network.Types            (MsgBlock (..), MsgGetBlocks
                                                      MsgGetHeaders (..), MsgHeaders (..))
 import           Pos.Communication.Types.Protocol   (MsgSubscribe (..))
 import           Pos.Communication.Types.Relay      (DataMsg (..))
-import           Pos.Configuration                  (HasNodeConfiguration, recoveryHeadersMessage)
+import           Pos.Configuration                  (HasNodeConfiguration,
+                                                     recoveryHeadersMessage)
 import           Pos.Core                           (BlockVersionData (..),
                                                      VssCertificate, coinPortionToDouble)
 import           Pos.Core.Configuration             (HasConfiguration, blkSecurityParam)
@@ -37,9 +38,9 @@ import           Pos.Crypto                         (AbstractHash, DecShare, Enc
                                                      Signature (..), VssPublicKey)
 import qualified Pos.DB.Class                       as DB
 import           Pos.Delegation.Types               (ProxySKLightConfirmation)
-import           Pos.Ssc.GodTossing.Core.Types      (Commitment (..), InnerSharesMap,
+import           Pos.Ssc.Core                       (Commitment (..), InnerSharesMap,
                                                      Opening (..), SignedCommitment)
-import           Pos.Ssc.GodTossing.Types.Message   (MCCommitment (..), MCOpening (..),
+import           Pos.Ssc.Message                    (MCCommitment (..), MCOpening (..),
                                                      MCShares (..), MCVssCertificate (..))
 import           Pos.Txp.Core                       (TxAux)
 import           Pos.Txp.Network.Types              (TxMsgContents (..))
@@ -126,11 +127,11 @@ instance MessageLimitedPure w => MessageLimited (ProxySignature w a)
 instance MessageLimited ProxySKLightConfirmation
 
 ----------------------------------------------------------------------------
----- GodTossing
+---- SSC
 ----------------------------------------------------------------------------
 
 -- | Upper bound on number of 'Scrape.Commitment's in single 'Commitment'.
--- Actually it's a maximum number of participants in GodTossing. So it also
+-- Actually it's a maximum number of participants in SSC. So it also
 -- limits number of shares, for instance.
 commitmentsNumLimit :: DB.MonadGState m => m Int
 commitmentsNumLimit =
@@ -270,17 +271,17 @@ instance MessageLimitedPure MsgGetBlocks where
 
 instance MessageLimited MsgGetBlocks
 
-instance MessageLimited (BlockHeader ssc) where
+instance MessageLimited BlockHeader where
     -- FIXME Integer -> Word32
     getMsgLenLimit _ = Limit . fromIntegral <$> DB.gsMaxHeaderSize
 
-instance MessageLimited (Block ssc) where
+instance MessageLimited Block where
     -- FIXME Integer -> Word32
     getMsgLenLimit _ = Limit . fromIntegral <$> DB.gsMaxBlockSize
 
-instance MessageLimited (MsgBlock ssc) where
+instance MessageLimited MsgBlock where
     getMsgLenLimit _ = do
-        blkLimit <- getMsgLenLimit (Proxy @(Block ssc))
+        blkLimit <- getMsgLenLimit (Proxy @Block)
         return $ MsgBlock <$> blkLimit
 
 instance HasConfiguration => MessageLimitedPure MsgGetHeaders where
@@ -291,9 +292,9 @@ instance HasConfiguration => MessageLimitedPure MsgGetHeaders where
 
 instance HasConfiguration => MessageLimited MsgGetHeaders
 
-instance HasNodeConfiguration => MessageLimited (MsgHeaders ssc) where
+instance HasNodeConfiguration => MessageLimited MsgHeaders where
     getMsgLenLimit _ = do
-        headerLimit <- getMsgLenLimit (Proxy @(BlockHeader ssc))
+        headerLimit <- getMsgLenLimit (Proxy @BlockHeader)
         return $
             MsgHeaders <$> vectorOf recoveryHeadersMessage headerLimit
 
@@ -314,8 +315,7 @@ instance MessageLimited MsgSubscribe
 -- this module), because currently it's quite messy (I think). @gromak
 -- By messy I mean at least that it contains some 'Arbitrary' stuff, which we
 -- usually put somewhere outside. Also I don't like that it knows about
--- GodTossing (I think instances for GodTossing should be in GodTossing),
--- but it can wait.
+-- SSC (I think instances for SSC should be in SSC), but it can wait.
 
 -- instance T.Arbitrary (MaxSize Commitment) where
 --     arbitrary = MaxSize <$>

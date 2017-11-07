@@ -22,32 +22,31 @@ module Pos.Util.JsonLog
 import           Universum
 
 import           Control.Monad.Except          (MonadError)
+import           Control.Monad.Trans.Identity  (IdentityT (..))
 import           Data.Aeson                    (encode)
 import           Data.Aeson.TH                 (deriveJSON)
 import           Data.Aeson.Types              (ToJSON)
 import qualified Data.ByteString.Lazy          as LBS
-import           Ether                         (TaggedTrans (..), IdentityT)
+import qualified Ether
 import           Formatting                    (sformat)
+import           JsonLog.CanJsonLog            (CanJsonLog)
 import           JsonLog.JsonLogT              (JsonLogConfig (..))
 import qualified JsonLog.JsonLogT              as JL
-import           JsonLog.CanJsonLog            (CanJsonLog)
 import           Mockable                      (Catch, Mockable, realTime)
 import           Serokell.Aeson.Options        (defaultOptions)
 import           System.Wlog                   (WithLogger)
 
 import           Pos.Binary.Block              ()
 import           Pos.Binary.Core               ()
-import           Pos.Block.Core                (BiSsc, Block, mainBlockTxPayload)
+import           Pos.Block.Core                (Block, mainBlockTxPayload)
 import           Pos.Block.Core.Genesis.Lens   (genBlockEpoch)
 import           Pos.Block.Core.Main.Lens      (mainBlockSlot)
 import           Pos.Communication.Relay.Logic (InvReqDataFlowLog)
-import           Pos.Core                      (HasConfiguration, SlotId (..), gbHeader, gbhPrevBlock,
-                                                getSlotIndex, headerHash,
+import           Pos.Core                      (HasConfiguration, SlotId (..), gbHeader,
+                                                gbhPrevBlock, getSlotIndex, headerHash,
                                                 mkLocalSlotIndex)
 import           Pos.Crypto                    (hash, hashHexF)
-import           Pos.Ssc.Class.Helpers         (SscHelpersClass)
-import           Pos.Txp.Core                  (txpTxs)
-import           Pos.Txp.MemState.Types        (MemPoolModifyReason)
+import           Pos.Txp                       (JLTxR (..), MemPoolModifyReason, txpTxs)
 import           Pos.Types                     (EpochIndex (..), HeaderHash, headerHashF)
 
 type BlockId = Text
@@ -67,12 +66,6 @@ data JLTxS = JLTxS
     { jlsNodeId :: Text
     , jlsTxId   :: Text
     , jlsInvReq :: InvReqDataFlowLog
-    } deriving Show
-
--- | Json log of one transaction being received by a node.
-data JLTxR = JLTxR
-    { jlrTxId  :: Text
-    , jlrError :: Maybe Text
     } deriving Show
 
 -- | Get 'SlotId' from 'JLSlotId'.
@@ -127,7 +120,7 @@ $(deriveJSON defaultOptions ''JLTxR)
 $(deriveJSON defaultOptions ''JLMemPool)
 
 -- | Return event of created block.
-jlCreatedBlock :: (BiSsc ssc, HasConfiguration) => Block ssc -> JLEvent
+jlCreatedBlock :: HasConfiguration => Block -> JLEvent
 jlCreatedBlock block = JLCreatedBlock $ JLBlock {..}
   where
     jlHash = showHeaderHash $ headerHash block
@@ -157,7 +150,7 @@ appendJL path ev = liftIO $ do
   LBS.appendFile path . encode $ JLTimedEvent (fromIntegral time) ev
 
 -- | Returns event of created 'Block'.
-jlAdoptedBlock :: (HasConfiguration, SscHelpersClass ssc) => Block ssc -> JLEvent
+jlAdoptedBlock :: HasConfiguration => Block -> JLEvent
 jlAdoptedBlock = JLAdoptedBlock . showHeaderHash . headerHash
 
 jsonLogConfigFromHandle :: MonadIO m => Handle -> m JsonLogConfig
@@ -176,7 +169,8 @@ jsonLogDefault x = do
     jlc <- view jsonLogConfig
     JL.jsonLogDefault jlc x
 
-deriving instance CanJsonLog (t m) => CanJsonLog (TaggedTrans tag t m)
+deriving instance CanJsonLog (t m) => CanJsonLog (Ether.TaggedTrans tag t m)
 
--- Required for @Explorer@ @BListener@ redirect
-deriving instance CanJsonLog m => CanJsonLog (TaggedTrans tag IdentityT m)
+-- Required for @Explorer@ @BListener@ and @ExtraContext@ redirect
+deriving instance CanJsonLog m => CanJsonLog (Ether.TaggedTrans tag IdentityT m)
+deriving instance CanJsonLog m => CanJsonLog (Ether.ReaderT tag r m)

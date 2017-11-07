@@ -61,7 +61,7 @@ import           Pos.Delegation.Helpers           (isRevokePsk)
 import           Pos.Delegation.Logic.Common      (DelegationStateAction,
                                                    runDelegationStateAction)
 import           Pos.Delegation.Types             (DlgPayload, mkDlgPayload)
-import           Pos.Lrc.Context                  (LrcContext)
+import           Pos.Lrc.Context                  (HasLrcContext)
 import qualified Pos.Lrc.DB                       as LrcDB
 import           Pos.StateLock                    (StateLock, withStateLockNoMetrics)
 import           Pos.Util                         (HasLens', leftToPanic,
@@ -134,48 +134,42 @@ data PskHeavyVerdict
     | PHAdded        -- ^ Successfully processed/added to psk mempool
     deriving (Show,Eq)
 
+type ProcessHeavyConstraint ctx m =
+       ( MonadIO m
+       , MonadMask m
+       , MonadDBRead m
+       , MonadBlockDB m
+       , MonadGState m
+       , MonadDelegation ctx m
+       , MonadReader ctx m
+       , HasLrcContext ctx
+       , Mockable CurrentTime m
+       , HasConfiguration
+       )
+
 -- | Processes heavyweight psk. Puts it into the mempool
 -- depending on issuer's stake, overrides if exists, checks
 -- validity and cachemsg state.
 processProxySKHeavy
-    :: forall ssc ctx m.
-       ( MonadIO m
-       , MonadMask m
-       , MonadDBRead m
-       , MonadBlockDB ssc m
-       , MonadGState m
-       , MonadDelegation ctx m
-       , MonadReader ctx m
-       , HasLens' ctx LrcContext
+    :: forall ctx m.
+       ( ProcessHeavyConstraint ctx m
        , HasLens' ctx StateLock
-       , Mockable CurrentTime m
-       , HasConfiguration
        )
     => ProxySKHeavy -> m PskHeavyVerdict
 processProxySKHeavy psk =
     withStateLockNoMetrics LowPriority $ \_stateLockHeader ->
-        processProxySKHeavyInternal @ssc psk
+        processProxySKHeavyInternal psk
 
 -- | Main logic of heavy psk processing, doesn't have
 -- synchronization. Should be called __only__ if you are sure that
 -- 'StateLock' is taken already.
-processProxySKHeavyInternal
-    :: forall ssc ctx m.
-       ( MonadIO m
-       , MonadMask m
-       , MonadDBRead m
-       , MonadBlockDB ssc m
-       , MonadGState m
-       , MonadDelegation ctx m
-       , MonadReader ctx m
-       , HasLens' ctx LrcContext
-       , Mockable CurrentTime m
-       , HasConfiguration
-       )
-    => ProxySKHeavy -> m PskHeavyVerdict
+processProxySKHeavyInternal ::
+       forall ctx m. (ProcessHeavyConstraint ctx m)
+    => ProxySKHeavy
+    -> m PskHeavyVerdict
 processProxySKHeavyInternal psk = do
     curTime <- microsecondsToUTC <$> currentTime
-    dbTip <- DB.getTipHeader @ssc
+    dbTip <- DB.getTipHeader
     let dbTipHash = headerHash dbTip
     let headEpoch = dbTip ^. epochIndexL
     richmen <-

@@ -17,6 +17,8 @@ import           Test.QuickCheck            (Gen, Property, Testable, arbitrary,
 import           Pos.Arbitrary.Block        ()
 import           Pos.Arbitrary.Delegation   (genDlgPayload)
 import           Pos.Arbitrary.Txp          (GoodTx, goodTxToTxAux)
+import           Pos.Arbitrary.Ssc          (commitmentMapEpochGen,
+                                             vssCertificateEpochGen)
 import           Pos.Binary.Class           (biSize)
 import           Pos.Block.Core             (BlockHeader, MainBlock)
 import           Pos.Block.Logic            (RawPayload (..), createMainBlockPure)
@@ -28,10 +30,7 @@ import           Pos.Core                   (BlockVersionData (bvdMaxBlockSize),
                                              unsafeMkLocalSlotIndex)
 import           Pos.Crypto                 (SecretKey)
 import           Pos.Delegation             (DlgPayload, ProxySKBlockInfo)
-import           Pos.Ssc.Class              (Ssc (..), sscDefaultPayload)
-import           Pos.Ssc.GodTossing         (GtPayload (..), SscGodTossing,
-                                             commitmentMapEpochGen,
-                                             vssCertificateEpochGen)
+import           Pos.Ssc                    (SscPayload (..), defaultSscPayload)
 import           Pos.Txp.Core               (TxAux)
 import           Pos.Update.Configuration   (HasUpdateConfiguration)
 import           Pos.Update.Core            (UpdatePayload (..))
@@ -69,11 +68,11 @@ spec = withDefConfiguration $ withDefUpdateConfiguration $
         prop "doesn't create blocks bigger than the limit" $
             forAll (choose (emptyBSize, emptyBSize * 10)) $ \(fromBytes -> limit) ->
             forAll arbitrary $ \(prevHeader, sk, updatePayload) ->
-            forAll validGtPayloadGen $ \(gtPayload, slotId) ->
+            forAll validSscPayloadGen $ \(sscPayload, slotId) ->
             forAll (genDlgPayload (siEpoch slotId)) $ \dlgPayload ->
             forAll (makeSmall $ listOf1 genTxAux) $ \txs ->
             let blk = producePureBlock limit prevHeader txs Nothing slotId
-                                       dlgPayload gtPayload updatePayload sk
+                                       dlgPayload sscPayload updatePayload sk
             in leftToCounter blk $ \b ->
                 let s = biSize b
                 in counterexample ("Real block size: " <> show s) $
@@ -92,12 +91,12 @@ spec = withDefConfiguration $ withDefUpdateConfiguration $
                    leftToCounter blk2 (const True)
         prop "strips ssc data when necessary" $
             forAll arbitrary $ \(prevHeader, sk) ->
-            forAll validGtPayloadGen $ \(gtPayload, slotId) ->
+            forAll validSscPayloadGen $ \(sscPayload, slotId) ->
             forAll (elements [0,0.5,0.9]) $ \(delta :: Double) ->
             let blk0 = producePureBlock infLimit prevHeader [] Nothing
-                                        slotId def (defGTP slotId) def sk
+                                        slotId def (defSscPld slotId) def sk
                 withPayload lim =
-                    producePureBlock lim prevHeader [] Nothing slotId def gtPayload def sk
+                    producePureBlock lim prevHeader [] Nothing slotId def sscPayload def sk
                 blk1 = withPayload infLimit
             in leftToCounter ((,) <$> blk0 <*> blk1) $ \(b0,b1) ->
                 let s = biSize b0 +
@@ -106,18 +105,18 @@ spec = withDefConfiguration $ withDefUpdateConfiguration $
                 in counterexample ("Tested with block size limit: " <> show s) $
                    leftToCounter blk2 (const True)
   where
-    defGTP :: HasConfiguration => SlotId -> GtPayload
-    defGTP sId = sscDefaultPayload @SscGodTossing $ siSlot sId
+    defSscPld :: HasConfiguration => SlotId -> SscPayload
+    defSscPld sId = defaultSscPayload $ siSlot sId
 
     infLimit = convertUnit @Gigabyte @Byte 1
 
     leftToCounter :: (ToString s, Testable p) => Either s a -> (a -> p) -> Property
     leftToCounter x c = either (\t -> counterexample (toString t) False) (property . c) x
 
-    emptyBlk :: (HasConfiguration, HasUpdateConfiguration, Testable p) => (Either Text (MainBlock SscGodTossing) -> p) -> Property
+    emptyBlk :: (HasConfiguration, HasUpdateConfiguration, Testable p) => (Either Text MainBlock -> p) -> Property
     emptyBlk foo =
         forAll arbitrary $ \(prevHeader, sk, slotId) ->
-        foo $ producePureBlock infLimit prevHeader [] Nothing slotId def (defGTP slotId) def sk
+        foo $ producePureBlock infLimit prevHeader [] Nothing slotId def (defSscPld slotId) def sk
 
     genTxAux :: HasConfiguration => Gen TxAux
     genTxAux =
@@ -126,35 +125,35 @@ spec = withDefConfiguration $ withDefUpdateConfiguration $
     noSscBlock
         :: (HasConfiguration, HasUpdateConfiguration)
         => Byte
-        -> BlockHeader SscGodTossing
+        -> BlockHeader
         -> [TxAux]
         -> DlgPayload
         -> UpdatePayload
         -> SecretKey
-        -> Either Text (MainBlock SscGodTossing)
+        -> Either Text MainBlock
     noSscBlock limit prevHeader txs proxyCerts updatePayload sk =
         let neutralSId = SlotId 0 (unsafeMkLocalSlotIndex $ fromIntegral $ blkSecurityParam * 2)
         in producePureBlock
-            limit prevHeader txs Nothing neutralSId proxyCerts (defGTP neutralSId) updatePayload sk
+            limit prevHeader txs Nothing neutralSId proxyCerts (defSscPld neutralSId) updatePayload sk
 
     producePureBlock
         :: (HasConfiguration, HasUpdateConfiguration)
         => Byte
-        -> BlockHeader SscGodTossing
+        -> BlockHeader
         -> [TxAux]
         -> ProxySKBlockInfo
         -> SlotId
         -> DlgPayload
-        -> SscPayload SscGodTossing
+        -> SscPayload
         -> UpdatePayload
         -> SecretKey
-        -> Either Text (MainBlock SscGodTossing)
+        -> Either Text MainBlock
     producePureBlock limit prev txs psk slot dlgPay sscPay usPay sk =
         createMainBlockPure limit prev psk slot sk $
         RawPayload txs sscPay dlgPay usPay
 
-validGtPayloadGen :: HasConfiguration => Gen (GtPayload, SlotId)
-validGtPayloadGen = do
+validSscPayloadGen :: HasConfiguration => Gen (SscPayload, SlotId)
+validSscPayloadGen = do
     vssCerts <- makeSmall $ fmap mkVssCertificatesMapLossy $ listOf $ vssCertificateEpochGen 0
     let mkSlot i = SlotId 0 (unsafeMkLocalSlotIndex (fromIntegral i))
     oneof [ do commMap <- makeSmall $ commitmentMapEpochGen 0

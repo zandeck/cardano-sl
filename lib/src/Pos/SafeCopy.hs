@@ -49,10 +49,9 @@ import           Pos.Data.Attributes             (Attributes (..), UnparsedField
 import           Pos.Delegation.Types            (DlgPayload (..))
 import           Pos.Merkle                      (MerkleNode (..), MerkleRoot (..),
                                                   MerkleTree (..))
-import           Pos.Ssc.Class.Types             (Ssc (..))
-import           Pos.Ssc.GodTossing.Core.Types   (Commitment (..), CommitmentsMap,
-                                                  GtPayload (..), GtProof (..),
-                                                  Opening (..))
+import           Pos.Ssc.Core                    (Commitment (..), CommitmentsMap,
+                                                  Opening (..), SscPayload (..),
+                                                  SscProof (..))
 import           Pos.Txp.Core.Types              (Tx (..), TxIn (..), TxInWitness (..),
                                                   TxOut (..), TxOutAux (..),
                                                   TxPayload (..), TxProof (..))
@@ -60,6 +59,7 @@ import           Pos.Update.Core.Types           (BlockVersionModifier (..),
                                                   SystemTag (..), UpdateData (..),
                                                   UpdatePayload (..), UpdateProposal (..),
                                                   UpdateVote (..))
+import qualified Pos.Util.Modifier               as MM
 
 
 ----------------------------------------------------------------------------
@@ -98,7 +98,7 @@ instance Bi SecretProof => SafeCopy SecretProof where
     putCopy = Bi.putCopyBi
 
 ----------------------------------------------------------------------------
--- God tossing
+-- SSC
 ----------------------------------------------------------------------------
 
 deriveSafeCopySimple 0 'base ''VssCertificate
@@ -107,8 +107,8 @@ deriveSafeCopySimple 0 'base ''Commitment
 deriveSafeCopySimple 0 'base ''CommitmentsMap
 deriveSafeCopySimple 0 'base ''VssCertificatesMap
 
-deriveSafeCopySimple 0 'base ''GtPayload
-deriveSafeCopySimple 0 'base ''GtProof
+deriveSafeCopySimple 0 'base ''SscPayload
+deriveSafeCopySimple 0 'base ''SscProof
 
 ----------------------------------------------------------------------------
 -- Base types
@@ -209,8 +209,8 @@ instance ( SafeCopy (BHeaderHash b)
 
 deriveSafeCopySimple 0 'base ''ChainDifficulty
 
-instance (Ssc ssc, SafeCopy (SscProof ssc)) =>
-         SafeCopy (BodyProof (MainBlockchain ssc)) where
+instance SafeCopy SscProof =>
+         SafeCopy (BodyProof MainBlockchain) where
     getCopy = contain $ do
         mpTxProof <- safeGet
         mpMpcProof      <- safeGet
@@ -223,7 +223,7 @@ instance (Ssc ssc, SafeCopy (SscProof ssc)) =>
         safePut mpProxySKsProof
         safePut mpUpdateProof
 
-instance SafeCopy (BodyProof (GenesisBlockchain ssc)) where
+instance SafeCopy (BodyProof GenesisBlockchain) where
     getCopy =
         contain $
         do x <- safeGet
@@ -232,7 +232,7 @@ instance SafeCopy (BodyProof (GenesisBlockchain ssc)) where
         contain $
         do safePut x
 
-instance SafeCopy (BlockSignature ssc) where
+instance SafeCopy BlockSignature where
     getCopy = contain $ Cereal.getWord8 >>= \case
         0 -> BlockSignature <$> safeGet
         1 -> BlockPSignatureLight <$> safeGet
@@ -242,7 +242,7 @@ instance SafeCopy (BlockSignature ssc) where
     putCopy (BlockPSignatureLight proxySig) = contain $ Cereal.putWord8 1 >> safePut proxySig
     putCopy (BlockPSignatureHeavy proxySig) = contain $ Cereal.putWord8 2 >> safePut proxySig
 
-instance SafeCopy (ConsensusData (MainBlockchain ssc)) where
+instance SafeCopy (ConsensusData MainBlockchain) where
     getCopy =
         contain $
         do _mcdSlot <- safeGet
@@ -257,7 +257,7 @@ instance SafeCopy (ConsensusData (MainBlockchain ssc)) where
            safePut _mcdDifficulty
            safePut _mcdSignature
 
-instance SafeCopy (ConsensusData (GenesisBlockchain ssc)) where
+instance SafeCopy (ConsensusData GenesisBlockchain) where
     getCopy =
         contain $
         do _gcdEpoch <- safeGet
@@ -268,8 +268,8 @@ instance SafeCopy (ConsensusData (GenesisBlockchain ssc)) where
         do safePut _gcdEpoch
            safePut _gcdDifficulty
 
-instance (Ssc ssc, SafeCopy (SscPayload ssc)) =>
-         SafeCopy (Body (MainBlockchain ssc)) where
+instance SafeCopy SscPayload =>
+         SafeCopy (Body MainBlockchain) where
     getCopy = contain $ do
         _mbTxPayload     <- safeGet
         _mbSscPayload    <- safeGet
@@ -282,7 +282,7 @@ instance (Ssc ssc, SafeCopy (SscPayload ssc)) =>
         safePut _mbDlgPayload
         safePut _mbUpdatePayload
 
-instance SafeCopy (Body (GenesisBlockchain ssc)) where
+instance SafeCopy (Body GenesisBlockchain) where
     getCopy =
         contain $
         do _gbLeaders <- safeGet
@@ -350,3 +350,7 @@ instance Cereal.Serialize Byte where
     put = Cereal.put . toBytes
 
 instance SafeCopy Byte
+
+instance (SafeCopy k, SafeCopy v, Eq k, Hashable k) => SafeCopy (MM.MapModifier k v) where
+    getCopy = contain $ MM.fromHashMap <$> safeGet
+    putCopy mm = contain $ safePut (MM.toHashMap mm)

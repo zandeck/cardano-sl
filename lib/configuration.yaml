@@ -26,8 +26,8 @@ dev: &dev
             fakeAvvmBalance:
               count: 10
               oneBalance: 100000
-            distribution:
-              testnetRichmenStakeDistr: []
+            avvmBalanceFactor: 1
+            useHeavyDlg: True  # it's better to use heavy delegation to test it more often
             seed: 0
         blockVersionData: &dev_core_genesis_spec_blockVersionData
           scriptVersion:     0
@@ -76,10 +76,14 @@ dev: &dev
 
   infra: &dev_infra
 
-    # NTP
+    # NTP slotting
     ntpResponseTimeout: 7000000 # 7 sec
     ntpPollDelay: 300000000 # 300 sec
     ntpMaxError: 120000000 # 2 mins
+
+    # NTP checking
+    timeDifferenceWarnInterval: 14400000000 # 4 hours
+    timeDifferenceWarnThreshold: 5000000 # 5 sec
 
     neighboursSendThreshold: 2
     kademliaDumpInterval: 4
@@ -100,10 +104,10 @@ dev: &dev
       bvAlt: 0
     systemTag: system
 
-  # GodTossing
-  gt: &dev_gt
+  ssc: &dev_ssc
     mpcSendInterval: 10 # must be less than (2 * k * slotDuration - networkDiameter)
     mdNoCommitmentsEpochThreshold: 3
+    noReportNoSecretsForEpoch1: False
 
   node: &dev_node
     networkDiameter: 3
@@ -113,7 +117,7 @@ dev: &dev
     dlgCacheParam: 500
     recoveryHeadersMessage: 20 # should be greater than k
     messageCacheTimeout: 30
-    networkConnectionTimeout: 2000
+    networkConnectionTimeout: 2000 # ms
     conversationEstablishTimeout: 30000
     blockRetrievalQueueSize: 100
     propagationQueueSize: 100
@@ -146,8 +150,8 @@ bench: &bench
             fakeAvvmBalance:
               count: 100
               oneBalance: 15000000
-            distribution:
-              testnetRichmenStakeDistr: []
+            avvmBalanceFactor: 1
+            useHeavyDlg: False
             seed: 0
         blockVersionData:
           <<: *dev_core_genesis_spec_blockVersionData
@@ -208,7 +212,7 @@ mainnet_base: &mainnet_base
               204779e68379f19ad88c3599c22015988febb4c0258f100a61346ce1: 1
             vssCerts: {}
             nonAvvmBalances: {}
-        blockVersionData:
+        blockVersionData: &mainnet_base_blockVersionData
           scriptVersion:     0
           slotDuration:      20000
           maxBlockSize:      2000000
@@ -255,10 +259,14 @@ mainnet_base: &mainnet_base
 
   infra:
 
-    # NTP
+    # NTP slotting
     ntpResponseTimeout: 10000000           # 10 sec
     ntpPollDelay: 60000000                 # 1 min
     ntpMaxError: 120000000 # 2 mins
+
+    # NTP checking
+    timeDifferenceWarnInterval: 14400000000 # 4 hours
+    timeDifferenceWarnThreshold: 5000000 # 5 sec
 
     neighboursSendThreshold: 2
     kademliaDumpInterval: 4
@@ -272,19 +280,20 @@ mainnet_base: &mainnet_base
 
   update: &mainnet_base_update
     applicationName: cardano-sl
-    applicationVersion: 1
+    applicationVersion: 0
     lastKnownBlockVersion:
       bvMajor: 0
-      bvMinor: 0
+      bvMinor: 1
       bvAlt: 0
     systemTag: none
 
-  # GodTossing
-  gt:
+  # SSC
+  ssc:
     mpcSendInterval: 100 # must be less than (2 * k * slotDuration - networkDiameter)
     mdNoCommitmentsEpochThreshold: 3
+    noReportNoSecretsForEpoch1: True
 
-  node:
+  node: &mainnet_base_node
     networkDiameter: 18
     defaultPeers: []
     mdNoBlocksSlotThreshold: 18 # should be less than 2 * k
@@ -14795,15 +14804,25 @@ mainnet_full: &mainnet_full
 mainnet_wallet_win64: &mainnet_wallet_win64
   <<: *mainnet_full
   update:
-    <<: *mainnet_base_update
+    <<:
     applicationName: csl-daedalus
+    applicationVersion: 3
+    lastKnownBlockVersion:
+      bvMajor: 0
+      bvMinor: 1
+      bvAlt: 0
     systemTag: win64
 
 mainnet_wallet_macos64: &mainnet_wallet_macos64
   <<: *mainnet_full
   update:
-    <<: *mainnet_base_update
+    <<:
     applicationName: csl-daedalus
+    applicationVersion: 3
+    lastKnownBlockVersion:
+      bvMajor: 0
+      bvMinor: 1
+      bvAlt: 0
     systemTag: macos64
 
 ##############################################################################
@@ -14819,20 +14838,78 @@ mainnet_dryrun_full: &mainnet_dryrun_full
     genesis:
       src:
         file: mainnet-genesis-dryrun-with-stakeholders.json
-        hash: ce1ea8da674f07c699c7ac49ea894b0f03a30f38d26fabb93a163fff04e8f360
+        hash: c6a004d3d178f600cd8caa10abbebe1549bef878f0665aea2903472d5abf7323
 
 mainnet_dryrun_wallet_win64: &mainnet_dryrun_wallet_win64
   <<: *mainnet_dryrun_full
   update:
-    <<: *mainnet_base_update
+    <<:
     applicationName: csl-daedalus
+    applicationVersion: 3
+    lastKnownBlockVersion:
+      bvMajor: 0
+      bvMinor: 1
+      bvAlt: 0
     systemTag: win64
 
 mainnet_dryrun_wallet_macos64: &mainnet_dryrun_wallet_macos64
   <<: *mainnet_dryrun_full
   update:
-    <<: *mainnet_base_update
+    <<:
     applicationName: csl-daedalus
+    applicationVersion: 3
+    lastKnownBlockVersion:
+      bvMajor: 0
+      bvMinor: 1
+      bvAlt: 0
+    systemTag: macos64
+
+##############################################################################
+##                                                                          ##
+##   Mainnet staging with short epoch                                       ##
+##                                                                          ##
+##############################################################################
+
+mainnet_staging_short_epoch_full: &mainnet_staging_short_epoch_full
+  <<: *mainnet_base
+  core:
+    <<: *mainnet_base_core
+    genesis:
+      src:
+        file: mainnet-staging-short-epoch-genesis.json
+        hash: f73231256fe6784c408e8a31b7bb8250f80ce64fdbdec137ad1da2faa257a166
+  update:
+    <<:
+    applicationName: cardano-sl
+    applicationVersion: 0
+    lastKnownBlockVersion:
+      bvMajor: 0
+      bvMinor: 0
+      bvAlt: 0
+    systemTag: none
+
+mainnet_staging_short_epoch_wallet_win64:
+  <<: *mainnet_staging_short_epoch_full
+  update:
+    <<:
+    applicationName: csl-daedalus
+    applicationVersion: 0
+    lastKnownBlockVersion:
+      bvMajor: 0
+      bvMinor: 0
+      bvAlt: 0
+    systemTag: win64
+
+mainnet_staging_short_epoch_wallet_macos64:
+  <<: *mainnet_staging_short_epoch_full
+  update:
+    <<:
+    applicationName: csl-daedalus
+    applicationVersion: 0
+    lastKnownBlockVersion:
+      bvMajor: 0
+      bvMinor: 0
+      bvAlt: 0
     systemTag: macos64
 
 ##############################################################################
@@ -14869,6 +14946,57 @@ mainnet_launch_base:
 
 ##############################################################################
 ##                                                                          ##
+##   Devnet config                                                          ##
+##                                                                          ##
+##############################################################################
+
+devnet: &devnet
+  <<: *mainnet_base
+  core:
+    <<: *mainnet_base_core
+    genesis:
+      <<: *mainnet_base_genesis
+      spec:
+        <<: *mainnet_base_spec
+        blockVersionData:
+          <<: *mainnet_base_blockVersionData
+          slotDuration:      20000 # set to desired value
+        protocolConstants:
+          <<: *mainnet_base_protocolConstants
+          protocolMagic: 170987650
+          k: 6 # set to desired value
+        avvmDistr: *mainnet_avvmDistr
+        initializer:
+          testnetInitializer:
+            testBalance:
+              poors:        200 # should be enough for developers
+              richmen:      4   # this is the number of core nodes,
+                                # set to desired value
+              richmenShare: 0.96
+              totalBalance: 13887504355000000
+              # We need to use HD addresses, because Daedalus can import
+              # only them and some developers may want to test Daedalus.
+              useHDAddresses: True
+            fakeAvvmBalance:
+              count: 100
+              oneBalance: 15000000
+            avvmBalanceFactor: 1
+            useHeavyDlg: True
+            seed: 0
+
+  node:
+    <<: *mainnet_base_node
+    networkDiameter: 18 # should be slightly less than slot duration
+    mdNoBlocksSlotThreshold: 5 # should be less than 2 * k
+    recoveryHeadersMessage: 200 # should be greater than k
+
+# TODO (@gromak): these testnet configs look wrong.
+# Why are we using 'TestnetRichmenStakeDistr' in testnet, it should be
+# 'TestnetCustomStakeDistr'.
+# Should be investigated!
+
+##############################################################################
+##                                                                          ##
 ##   Testnet configs (full)                                                 ##
 ##                                                                          ##
 ##############################################################################
@@ -14896,8 +15024,8 @@ testnet_public_full: &testnet_public_full
             fakeAvvmBalance:
               count: 100
               oneBalance: 15000000
-            distribution:
-              testnetRichmenStakeDistr: []
+            avvmBalanceFactor: 1
+            useHeavyDlg: True
             seed: 0
 
 testnet_staging_full: &testnet_staging_full

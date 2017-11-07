@@ -18,6 +18,7 @@ module Pos.Block.Slog.Logic
        , slogRollbackBlocks
 
        , BypassSecurityCheck(..)
+       , ShouldCallBListener (..)
        ) where
 
 import           Universum
@@ -47,15 +48,13 @@ import           Pos.DB.Block             (MonadBlockDBWrite, blkGetHeader)
 import           Pos.DB.Class             (MonadDBRead, dbPutBlund)
 import           Pos.Exception            (assertionFailed, reportFatalError)
 import qualified Pos.GState               as GS
-import           Pos.Lrc.Context          (LrcContext)
+import           Pos.Lrc.Context          (HasLrcContext)
 import qualified Pos.Lrc.DB               as LrcDB
 import           Pos.Slotting             (MonadSlots (getCurrentSlot))
-import           Pos.Ssc.Class.Helpers    (SscHelpersClass (..))
 import           Pos.Update.Configuration (HasUpdateConfiguration, lastKnownBlockVersion)
-import           Pos.Util                 (HasLens', inAssertMode, _neHead, _neLast)
+import           Pos.Util                 (inAssertMode, _neHead, _neLast)
 import           Pos.Util.Chrono          (NE, NewestFirst (getNewestFirst),
                                            OldestFirst (..), toOldestFirst)
-
 
 ----------------------------------------------------------------------------
 -- Helpers
@@ -98,10 +97,9 @@ mustDataBeKnown adoptedBV =
 ----------------------------------------------------------------------------
 
 -- | Set of basic constraints needed by Slog.
-type MonadSlogBase ssc ctx m =
+type MonadSlogBase ctx m =
     ( MonadSlots ctx m
     , MonadIO m
-    , SscHelpersClass ssc
     , MonadDBRead m
     , WithLogger m
     , HasConfiguration
@@ -109,21 +107,20 @@ type MonadSlogBase ssc ctx m =
     )
 
 -- | Set of constraints needed for Slog verification.
-type MonadSlogVerify ssc ctx m =
-    ( MonadSlogBase ssc ctx m
+type MonadSlogVerify ctx m =
+    ( MonadSlogBase ctx m
     , MonadReader ctx m
-    , HasLens' ctx LrcContext
+    , HasLrcContext ctx
     )
 
 -- | Verify everything from block that is not checked by other components.
 -- All blocks must be from the same epoch.
 slogVerifyBlocks
-    :: forall ssc ctx m.
-    ( MonadSlogVerify ssc ctx m
+    :: forall ctx m.
+    ( MonadSlogVerify ctx m
     , MonadError Text m
-    , SscHelpersClass ssc
     )
-    => OldestFirst NE (Block ssc)
+    => OldestFirst NE Block
     -> m (OldestFirst NE SlogUndo)
 slogVerifyBlocks blocks = do
     curSlot <- getCurrentSlot
@@ -178,9 +175,9 @@ slogVerifyBlocks blocks = do
     return $ over _Wrapped NE.fromList $ map SlogUndo slogUndo
 
 -- | Set of constraints necessary to apply/rollback blocks in Slog.
-type MonadSlogApply ssc ctx m =
-    ( MonadSlogBase ssc ctx m
-    , MonadBlockDBWrite ssc m
+type MonadSlogApply ctx m =
+    ( MonadSlogBase ctx m
+    , MonadBlockDBWrite m
     , MonadBListener m
     , MonadMask m
     , MonadReader ctx m
@@ -195,13 +192,17 @@ type MonadSlogApply ssc ctx m =
 -- ↑ I reduced duplication by introducing 'slogCommon', but it wants
 -- more and I don't.
 
+-- | Flag determining whether to call BListener callback.
+newtype ShouldCallBListener = ShouldCallBListener Bool
+
 -- | This function does everything that should be done when blocks are
 -- applied and is not done in other components.
 slogApplyBlocks
-    :: forall ssc ctx m. (MonadSlogApply ssc ctx m)
-    => OldestFirst NE (Blund ssc)
+    :: forall ctx m. (MonadSlogApply ctx m)
+    => ShouldCallBListener
+    -> OldestFirst NE Blund
     -> m SomeBatchOp
-slogApplyBlocks blunds = do
+slogApplyBlocks (ShouldCallBListener callBListener) blunds = do
     -- Note: it's important to put blunds first. The invariant is that
     -- the sequence of blocks corresponding to the tip must exist in
     -- BlockDB. If program is interrupted after we put blunds and
@@ -211,13 +212,14 @@ slogApplyBlocks blunds = do
     -- If the program is interrupted at this point (after putting on
     -- block), we will have a garbage block in BlockDB, but it's not a
     -- problem.
-    bListenerBatch <- onApplyBlocks blunds
+    bListenerBatch <- if callBListener then onApplyBlocks blunds
+                      else pure mempty
 
     let newestBlock = NE.last $ getOldestFirst blunds
         newestDifficulty = newestBlock ^. difficultyL
     let putTip = SomeBatchOp $ GS.PutTip $ headerHash newestBlock
     lastSlots <- slogGetLastSlots
-    slogCommon @ssc (newLastSlots lastSlots)
+    slogCommon (newLastSlots lastSlots)
     putDifficulty <- GS.getMaxSeenDifficulty <&> \x ->
         SomeBatchOp [GS.PutMaxSeenDifficulty newestDifficulty
                         | newestDifficulty > x]
@@ -253,11 +255,12 @@ newtype BypassSecurityCheck = BypassSecurityCheck Bool
 -- | This function does everything that should be done when rollback
 -- happens and that is not done in other components.
 slogRollbackBlocks ::
-       forall ssc ctx m. MonadSlogApply ssc ctx m
+       forall ctx m. (MonadSlogApply ctx m)
     => BypassSecurityCheck -- ^ is rollback for more than k blocks allowed?
-    -> NewestFirst NE (Blund ssc)
+    -> ShouldCallBListener
+    -> NewestFirst NE Blund
     -> m SomeBatchOp
-slogRollbackBlocks (BypassSecurityCheck bypassSecurity) blunds = do
+slogRollbackBlocks (BypassSecurityCheck bypassSecurity) (ShouldCallBListener callBListener) blunds = do
     inAssertMode $ when (isGenesis0 (blocks ^. _Wrapped . _neLast)) $
         assertionFailed $
         colorize Red "FATAL: we are TRYING TO ROLLBACK 0-TH GENESIS block"
@@ -266,7 +269,7 @@ slogRollbackBlocks (BypassSecurityCheck bypassSecurity) blunds = do
     maxSeenDifficulty <- GS.getMaxSeenDifficulty
     resultingDifficulty <-
         maybe 0 (view difficultyL) <$>
-        blkGetHeader @ssc (NE.head (getOldestFirst . toOldestFirst $ blunds) ^. prevBlockL)
+        blkGetHeader (NE.head (getOldestFirst . toOldestFirst $ blunds) ^. prevBlockL)
     let
         secure =
             -- no underflow from subtraction
@@ -277,12 +280,13 @@ slogRollbackBlocks (BypassSecurityCheck bypassSecurity) blunds = do
         reportFatalError "slogRollbackBlocks: the attempted rollback would \
                          \lead to a more than 'k' distance between tip and \
                          \last seen block, which is a security risk. Aborting."
-    bListenerBatch <- onRollbackBlocks blunds
+    bListenerBatch <- if callBListener then onRollbackBlocks blunds
+                      else pure mempty
     let putTip =
             SomeBatchOp $ GS.PutTip $
             (NE.last $ getNewestFirst blunds) ^. prevBlockL
     lastSlots <- slogGetLastSlots
-    slogCommon @ssc (newLastSlots lastSlots)
+    slogCommon (newLastSlots lastSlots)
     return $
         SomeBatchOp
             [putTip, bListenerBatch, SomeBatchOp (blockExtraBatch lastSlots)]
@@ -318,7 +322,7 @@ slogRollbackBlocks (BypassSecurityCheck bypassSecurity) blunds = do
 
 -- Common actions for rollback and apply.
 slogCommon
-    :: MonadSlogApply ssc ctx m
+    :: MonadSlogApply ctx m
     => LastBlkSlots
     -> m ()
 slogCommon newLastSlots = do

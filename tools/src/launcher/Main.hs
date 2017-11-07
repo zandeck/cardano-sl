@@ -4,6 +4,7 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE QuasiQuotes       #-}
 {-# LANGUAGE RankNTypes        #-}
+{-# LANGUAGE TemplateHaskell   #-}
 
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
@@ -50,6 +51,8 @@ import           Pos.Launcher.Configuration   (ConfigurationOptions (..))
 import           Pos.Reporting.Methods        (retrieveLogFiles, sendReport)
 import           Pos.ReportServer.Report      (ReportType (..))
 import           Pos.Util                     (directory, sleep)
+import           Pos.Util.CompileInfo         (HasCompileInfo, retrieveCompileTimeInfo,
+                                               withCompileInfo)
 
 data LauncherOptions = LO
     { loNodePath            :: !FilePath
@@ -184,6 +187,7 @@ main = do
                 Just lc -> loNodeArgs ++ ["--log-config", toText lc]
     usingLoggerName "launcher" $
         withConfigurations loConfiguration $
+        withCompileInfo $(retrieveCompileTimeInfo) $
         liftIO $
         case loWalletPath of
             Nothing -> do
@@ -216,15 +220,19 @@ main = do
     -- their choice. It doesn't cover all cases
     -- (e. g. `--system-start=10`), but it's better than nothing.
     addConfigurationOptions :: ConfigurationOptions -> [Text] -> [Text]
-    addConfigurationOptions (ConfigurationOptions path key systemStart) =
+    addConfigurationOptions (ConfigurationOptions path key systemStart seed) =
         addConfFileOption path .
-        addConfKeyOption key . addSystemStartOption systemStart
+        addConfKeyOption key .
+        addSystemStartOption systemStart .
+        addSeedOption seed
 
     addConfFileOption filePath =
         maybeAddOption "--configuration-file" (toText filePath)
     addConfKeyOption key = maybeAddOption "--configuration-key" key
     addSystemStartOption =
         maybe identity (maybeAddOption "--system-start" . timestampToText)
+    addSeedOption =
+        maybe identity (maybeAddOption "--configuration-seed" . show)
 
     maybeAddOption :: Text -> Text -> [Text] -> [Text]
     maybeAddOption optionName optionValue options
@@ -240,7 +248,7 @@ main = do
 -- * Launch the node.
 -- * If it exits with code 20, then update and restart, else quit.
 serverScenario
-    :: HasConfigurations
+    :: (HasConfigurations, HasCompileInfo)
     => Maybe FilePath                      -- ^ Logger config
     -> (FilePath, [Text], Maybe FilePath)  -- ^ Node, its args, node log
     -> (FilePath, [Text], Maybe FilePath, Maybe FilePath)
@@ -265,7 +273,7 @@ serverScenario logConf node updater report = do
 -- * Launch the node and the wallet.
 -- * If the wallet exits with code 20, then update and restart, else quit.
 clientScenario
-    :: HasConfigurations
+    :: (HasConfigurations, HasCompileInfo)
     => Maybe FilePath                      -- ^ Logger config
     -> (FilePath, [Text], Maybe FilePath)  -- ^ Node, its args, node log
     -> (FilePath, [Text])                  -- ^ Wallet, args
@@ -390,9 +398,9 @@ spawnNode (path, args, mbLogPath) = do
                  }
     phvar <- newEmptyMVar
     asc <- async (system' phvar cr mempty)
-    mbPh <- liftIO $ timeout 5000000 (takeMVar phvar)
+    mbPh <- liftIO $ timeout 10000000 (takeMVar phvar)
     case mbPh of
-        Nothing -> error "couldn't run the node (it didn't start after 5s)"
+        Nothing -> error "couldn't run the node (it didn't start after 10s)"
         Just ph -> do
             putText "Node started"
             return (ph, asc, logPath)
@@ -415,7 +423,7 @@ runWallet (path, args) = do
 -- ...Or maybe we don't care because we don't restart anything after sending
 -- logs (and so the user never actually sees the process or waits for it).
 reportNodeCrash
-    :: (HasConfigurations, MonadIO m)
+    :: (HasConfigurations, HasCompileInfo, MonadIO m)
     => ExitCode        -- ^ Exit code of the node
     -> Maybe FilePath  -- ^ Path to the logger config
     -> String          -- ^ URL of the server

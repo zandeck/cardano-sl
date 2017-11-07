@@ -3,7 +3,8 @@
 -- | Tx sending functionality in Auxx.
 
 module Command.Tx
-       ( sendToAllGenesis
+       ( SendToAllGenesisParams (..)
+       , sendToAllGenesis
        , send
        , sendTxsFromFile
        ) where
@@ -12,9 +13,11 @@ import           Universum
 
 import           Control.Concurrent.STM.TQueue    (newTQueue, tryReadTQueue, writeTQueue)
 import           Control.Exception.Safe           (Exception (..), try)
-import           Control.Monad.Except             (runExceptT, throwError)
+import           Control.Monad.Except             (runExceptT)
 import qualified Data.ByteString                  as BS
+import qualified Data.HashMap.Strict              as HM
 import           Data.List                        ((!!))
+import qualified Data.List.NonEmpty               as NE
 import qualified Data.Text                        as T
 import qualified Data.Text.IO                     as T
 import           Data.Time.Units                  (toMicroseconds)
@@ -30,37 +33,48 @@ import           System.Random                    (randomRIO)
 import           System.Wlog                      (logError, logInfo)
 
 import           Pos.Binary                       (decodeFull)
+import           Pos.Client.KeyStorage            (getSecretKeysPlain)
 import           Pos.Client.Txp.Balances          (getOwnUtxoForPk)
 import           Pos.Client.Txp.Util              (createTx)
 import           Pos.Communication                (SendActions,
                                                    immediateConcurrentConversations,
-                                                   submitTx, submitTxRaw)
+                                                   prepareMTx, submitTxRaw)
 import           Pos.Configuration                (HasNodeConfiguration)
 import           Pos.Core                         (BlockVersionData (bvdSlotDuration),
-                                                   Timestamp (..), mkCoin)
+                                                   IsBootstrapEraAddr (..),
+                                                   Timestamp (..), deriveFirstHDAddress,
+                                                   makePubKeyAddress, mkCoin)
 import           Pos.Core.Configuration           (HasConfiguration,
                                                    genesisBlockVersionData,
                                                    genesisSecretKeys)
-import           Pos.Crypto                       (emptyPassphrase, encToPublic,
-                                                   fakeSigner, safeToPublic, toPublic,
-                                                   withSafeSigner)
+import           Pos.Crypto                       (EncryptedSecretKey, emptyPassphrase,
+                                                   encToPublic, fakeSigner, safeToPublic,
+                                                   toPublic, withSafeSigners)
 import           Pos.Infra.Configuration          (HasInfraConfiguration)
-import           Pos.Ssc.GodTossing.Configuration (HasGtConfiguration)
+import           Pos.Ssc.Configuration            (HasSscConfiguration)
 import           Pos.Txp                          (TxAux, TxOut (..), TxOutAux (..),
                                                    topsortTxAuxes, txaF)
 import           Pos.Update.Configuration         (HasUpdateConfiguration)
 import           Pos.Util.CompileInfo             (HasCompileInfo)
+import           Pos.Util.UserSecret              (usWallet, userSecret, wusRootKey)
 import           Pos.Util.Util                    (maybeThrow)
-import           Pos.Wallet                       (getSecretKeys)
 
-import           Command.Types                    (SendMode (..),
-                                                   SendToAllGenesisParams (..))
-import           Mode                             (AuxxMode, CmdCtx (..), getCmdCtx)
-import           Pos.Auxx                         (makePubKeyAddressAuxx)
+import           Lang.Value                       (SendMode (..))
+import           Mode                             (AuxxMode, CmdCtx (..), getCmdCtx,
+                                                   makePubKeyAddressAuxx)
 
 ----------------------------------------------------------------------------
 -- Send to all genesis
 ----------------------------------------------------------------------------
+
+-- | Parameters for 'SendToAllGenesis' command.
+data SendToAllGenesisParams = SendToAllGenesisParams
+    { stagpDuration    :: !Int
+    , stagpConc        :: !Int
+    , stagpDelay       :: !Int
+    , stagpMode        :: !SendMode
+    , stagpTpsSentFile :: !FilePath
+    } deriving (Show)
 
 -- | Count submitted and failed transactions.
 --
@@ -72,17 +86,23 @@ data TxCount = TxCount
     , _txcThreads   :: !Int }
 
 addTxSubmit :: Mockable SharedAtomic m => SharedAtomicT m TxCount -> m ()
-addTxSubmit mvar = modifySharedAtomic mvar (\(TxCount submitted failed sending) -> return (TxCount (submitted + 1) failed sending, ()))
+addTxSubmit =
+    flip modifySharedAtomic
+        (\(TxCount submitted failed sending) ->
+             pure (TxCount (submitted + 1) failed sending, ()))
 
 addTxFailed :: Mockable SharedAtomic m => SharedAtomicT m TxCount -> m ()
-addTxFailed mvar = modifySharedAtomic mvar (\(TxCount submitted failed sending) -> return (TxCount submitted (failed + 1) sending, ()))
+addTxFailed =
+    flip modifySharedAtomic
+        (\(TxCount submitted failed sending) ->
+             pure (TxCount submitted (failed + 1) sending, ()))
 
 sendToAllGenesis
     :: ( HasConfiguration
        , HasNodeConfiguration
        , HasInfraConfiguration
        , HasUpdateConfiguration
-       , HasGtConfiguration
+       , HasSscConfiguration
        , HasCompileInfo
        )
     => SendActions AuxxMode
@@ -183,7 +203,7 @@ send
        , HasNodeConfiguration
        , HasInfraConfiguration
        , HasUpdateConfiguration
-       , HasGtConfiguration
+       , HasSscConfiguration
        , HasCompileInfo
        )
     => SendActions AuxxMode
@@ -192,19 +212,30 @@ send
     -> AuxxMode ()
 send sendActions idx outputs = do
     CmdCtx{ccPeers} <- getCmdCtx
-    skeys <- getSecretKeys
-    let skey = skeys !! idx
-        curPk = encToPublic skey
-    etx <- withSafeSigner skey (pure emptyPassphrase) $ \mss -> runExceptT $ do
-        ss <- mss `whenNothing` throwError (toException $ AuxxException "Invalid passphrase")
-        ExceptT $ try $ submitTx
-            (immediateConcurrentConversations sendActions ccPeers)
-            ss
-            (map TxOutAux outputs)
-            curPk
+    skey <- takeSecret
+    let curPk = encToPublic skey
+    let plainAddresses = map (flip makePubKeyAddress curPk . IsBootstrapEraAddr) [False, True]
+    let (hdAddresses, hdSecrets) = unzip $ map
+            (\ibea -> fromMaybe (error "send: pass mismatch") $
+                    deriveFirstHDAddress (IsBootstrapEraAddr ibea) emptyPassphrase skey) [False, True]
+    let allAddresses = hdAddresses ++ plainAddresses
+    let allSecrets = hdSecrets ++ [skey, skey]
+    etx <- withSafeSigners allSecrets (pure emptyPassphrase) $ \signers -> runExceptT @AuxxException $ do
+        let addrSig = HM.fromList $ zip allAddresses signers
+        let getSigner = fromMaybe (error "Couldn't get SafeSigner") . flip HM.lookup addrSig
+        -- BE CAREFUL: We create remain address using our pk, wallet doesn't show such addresses
+        (txAux,_) <- lift $ prepareMTx getSigner (NE.fromList allAddresses) (map TxOutAux outputs) curPk
+        txAux <$ (ExceptT $ try $ submitTxRaw (immediateConcurrentConversations sendActions ccPeers) txAux)
     case etx of
-        Left err      -> putText $ sformat ("Error: "%stext) (toText $ displayException err)
-        Right (tx, _) -> putText $ sformat ("Submitted transaction: "%txaF) tx
+        Left err -> logError $ sformat ("Error: "%stext) (toText $ displayException err)
+        Right tx -> logInfo $ sformat ("Submitted transaction: "%txaF) tx
+  where
+    takeSecret :: AuxxMode EncryptedSecretKey
+    takeSecret
+        | idx == -1 = do
+            _userSecret <- view userSecret >>= atomically . readTVar
+            pure $ maybe (error "Unknown wallet address") (^. wusRootKey) (_userSecret ^. usWallet)
+        | otherwise = (!! idx) <$> getSecretKeysPlain
 
 ----------------------------------------------------------------------------
 -- Send from file
@@ -217,7 +248,7 @@ sendTxsFromFile
        , HasInfraConfiguration
        , HasUpdateConfiguration
        , HasNodeConfiguration
-       , HasGtConfiguration
+       , HasSscConfiguration
        , HasCompileInfo
        )
     => SendActions AuxxMode

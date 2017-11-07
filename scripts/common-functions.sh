@@ -38,7 +38,7 @@ function logs {
 
   local log_file=$1
   local conf_dir="$logs_dir/conf"
-  local template_name="log-templates/log-template.yaml"
+  local template_name="log-templates/log-template-demo.yaml"
   if [[ "$LOG_TEMPLATE" != "" ]]; then
     template_name="$LOG_TEMPLATE"
   fi
@@ -185,7 +185,6 @@ function node_cmd {
   local st=''
   local reb=''
   local no_ntp=''
-  local ssc_algo=''
   local web=''
   local configuration=''
 
@@ -196,9 +195,6 @@ function node_cmd {
       keys_args="--keyfile \"secrets/secret-$((i+1)).key\""
   fi
 
-  if [[ "$SSC_ALGO" != "" ]]; then
-    ssc_algo=" --ssc-algo $SSC_ALGO "
-  fi
   if [[ $NO_REBUILD == "" ]]; then
     reb=" --rebuild-db "
   fi
@@ -248,7 +244,6 @@ function node_cmd {
     echo -n " $configuration "
   fi
   echo -n " $(logs node$i.log) $time_lord $stats"
-  echo -n " $ssc_algo "
   echo -n " $web "
   echo -n " $report_server "
   echo -n " $wallet_args "

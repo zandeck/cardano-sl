@@ -9,43 +9,33 @@ import           Universum
 
 import           Pos.Arbitrary.Block ()
 import qualified Pos.Block.Core      as BT
-import           Pos.Ssc.GodTossing  (SscGodTossing)
-import           Pos.Ssc.NistBeacon  (SscNistBeacon)
 
-import           Test.Pos.Util       (safeCopyTest, withDefConfiguration)
+import           Test.Pos.Helpers    (safeCopyTest)
+import           Test.Pos.Util       (withDefConfiguration)
 
 spec :: Spec
 spec = withDefConfiguration $ describe "Block types" $ do
     describe "SafeCopy instances" $ do
         describe "GenericBlockHeader" $ do
             describe "GenesisBlockHeader" $ do
-                safeCopyTest @(BT.GenesisBlockHeader SscNistBeacon)
-                safeCopyTest @(BT.GenesisBlockHeader SscGodTossing)
+                safeCopyTest @BT.GenesisBlockHeader
             describe "MainBlockHeader" $ do
-                safeCopyTest @(BT.MainBlockHeader SscNistBeacon)
-                safeCopyTest @(BT.MainBlockHeader SscGodTossing)
+                safeCopyTest @BT.MainBlockHeader
         describe "GenesisBlockchain" $ do
             describe "BodyProof" $ do
-                safeCopyTest @(BT.BodyProof (BT.GenesisBlockchain SscNistBeacon))
-                safeCopyTest @(BT.BodyProof (BT.GenesisBlockchain SscGodTossing))
+                safeCopyTest @(BT.BodyProof BT.GenesisBlockchain)
             describe "ConsensusData" $ do
-                safeCopyTest @(BT.ConsensusData (BT.GenesisBlockchain SscNistBeacon))
-                safeCopyTest @(BT.ConsensusData (BT.GenesisBlockchain SscGodTossing))
+                safeCopyTest @(BT.ConsensusData BT.GenesisBlockchain)
             describe "Body" $ do
-                safeCopyTest @(BT.Body (BT.GenesisBlockchain SscNistBeacon))
-                safeCopyTest @(BT.Body (BT.GenesisBlockchain SscGodTossing))
+                safeCopyTest @(BT.Body BT.GenesisBlockchain)
         describe "MainBlockchain" $ do
             safeCopyTest @BT.MainExtraHeaderData
             safeCopyTest @BT.MainExtraBodyData
             describe "BodyProof" $ do
-                safeCopyTest @(BT.BodyProof (BT.MainBlockchain SscNistBeacon))
-                safeCopyTest @(BT.BodyProof (BT.MainBlockchain SscGodTossing))
+                safeCopyTest @(BT.BodyProof BT.MainBlockchain)
             describe "BlockSignature" $ do
-                safeCopyTest @(BT.BlockSignature SscNistBeacon)
-                safeCopyTest @(BT.BlockSignature SscGodTossing)
+                safeCopyTest @BT.BlockSignature
             describe "ConsensusData" $ do
-                safeCopyTest @(BT.ConsensusData (BT.MainBlockchain SscNistBeacon))
-                safeCopyTest @(BT.ConsensusData (BT.MainBlockchain SscGodTossing))
+                safeCopyTest @(BT.ConsensusData BT.MainBlockchain)
             describe "Body" $ do
-                safeCopyTest @(BT.Body (BT.MainBlockchain SscNistBeacon))
-                safeCopyTest @(BT.Body (BT.MainBlockchain SscGodTossing))
+                safeCopyTest @(BT.Body BT.MainBlockchain)

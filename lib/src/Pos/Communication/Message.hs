@@ -14,7 +14,7 @@ import           Pos.Communication.Types.Protocol (MsgSubscribe)
 import           Pos.Communication.Types.Relay    (DataMsg, InvMsg, InvOrData, MempoolMsg,
                                                    ReqMsg, ReqOrRes)
 import           Pos.Delegation.Types             (ProxySKLightConfirmation)
-import           Pos.Ssc.GodTossing.Types.Message (MCCommitment, MCOpening, MCShares,
+import           Pos.Ssc.Message                  (MCCommitment, MCOpening, MCShares,
                                                    MCVssCertificate)
 import           Pos.Txp.Network.Types            (TxMsgContents)
 import           Pos.Types                        (ProxySKHeavy, ProxySKLight)
@@ -29,7 +29,7 @@ instance Message MsgGetHeaders where
     messageCode _ = 4
     formatMessage _ = "GetHeaders"
 
-instance Message (MsgHeaders ssc) where
+instance Message MsgHeaders where
     messageCode _ = 5
     formatMessage _ = "BlockHeaders"
 
@@ -37,7 +37,7 @@ instance Message MsgGetBlocks where
     messageCode _ = 6
     formatMessage _ = "GetBlocks"
 
-instance Message (MsgBlock ssc) where
+instance Message MsgBlock where
     messageCode _ = 7
     formatMessage _ = "Block"
 

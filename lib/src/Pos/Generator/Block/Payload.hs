@@ -14,7 +14,7 @@ import           Control.Lens               (at, uses, (%=), (.=))
 import           Control.Lens.TH            (makeLenses)
 import           Control.Monad.Random.Class (MonadRandom (..))
 import qualified Data.HashMap.Strict        as HM
-import           Data.List                  (notElem, (!!))
+import           Data.List                  ((!!))
 import qualified Data.List.NonEmpty         as NE
 import qualified Data.Map                   as M
 import qualified Data.Vector                as V
@@ -31,16 +31,13 @@ import           Pos.Core.Configuration     (HasConfiguration)
 import           Pos.Crypto                 (SecretKey, WithHash (..), fakeSigner, hash,
                                              toPublic)
 import           Pos.Generator.Block.Error  (BlockGenError (..))
-import           Pos.Generator.Block.Mode   (BlockGenRandMode, MonadBlockGenBase)
+import           Pos.Generator.Block.Mode   (BlockGenMode, BlockGenRandMode,
+                                             MonadBlockGenBase)
 import           Pos.Generator.Block.Param  (HasBlockGenParams (..), HasTxGenParams (..))
 import qualified Pos.GState                 as DB
 import           Pos.Txp.Core               (Tx (..), TxAux (..), TxIn (..), TxOut (..),
                                              TxOutAux (..))
-#ifdef WITH_EXPLORER
-import           Pos.Explorer.Txp.Local     (eTxProcessTransactionNoLock)
-#else
-import           Pos.Txp.Logic              (txProcessTransactionNoLock)
-#endif
+import           Pos.Txp.MemState.Class     (MonadTxpLocal (..))
 import           Pos.Txp.Toil.Class         (MonadUtxo (..), MonadUtxoRead (..))
 import           Pos.Txp.Toil.Types         (Utxo)
 import qualified Pos.Txp.Toil.Utxo          as Utxo
@@ -72,6 +69,7 @@ selectDistinct n0 p@(a, b)
 -- taken from given range [a, b]
 selectSomeFromList :: MonadRandom m => (Int, Int) -> [a] -> m [a]
 selectSomeFromList p@(a, b0) ls
+    | l == 0 = error "selectSomeFromList: empty list passed"
     | l < a = error $
               "selectSomeFromList: list length < a (" <>
               show l <> " < " <> show a <> ")"
@@ -126,8 +124,11 @@ instance (HasConfiguration, Monad m) => MonadUtxo (StateT GenTxData m) where
 -- TODO: move to txp, think how to unite it with 'Pos.Arbitrary.Txp'.
 -- | Generate valid 'TxPayload' using current global state.
 genTxPayload ::
-       forall g m. (RandomGen g, MonadBlockGenBase m)
-    => BlockGenRandMode g m ()
+       forall ext g m.
+    ( RandomGen g
+    , MonadBlockGenBase m
+    , MonadTxpLocal (BlockGenMode ext m))
+    => BlockGenRandMode ext g m ()
 genTxPayload = do
     invAddrSpendingData <-
         unInvAddrSpendingData <$> view (blockGenParams . asSpendingData)
@@ -143,7 +144,7 @@ genTxPayload = do
         txsN <- fromIntegral <$> getRandomR (a, a + d)
         void $ replicateM txsN genTransaction
   where
-    genTransaction :: StateT GenTxData (BlockGenRandMode g m) ()
+    genTransaction :: StateT GenTxData (BlockGenRandMode ext g m) ()
     genTransaction = do
         utxo <- use gtdUtxo
         utxoSize <- uses gtdUtxoKeys V.length
@@ -187,8 +188,11 @@ genTxPayload = do
         let maxInputAddrsN = max 1 $ min 3 $ length addrsWithMoney - 1
         inputAddrs <- selectSomeFromList (1, maxInputAddrsN) addrsWithMoney
         -- Output addresses should differ from input addresses
-        outputAddrs <- selectSomeFromList (1, maxOutputsN) $
-            filter (`notElem` inputAddrs) utxoAddresses
+        let notInputs = filter (`notElem` inputAddrs) utxoAddresses
+        when (null notInputs) $ throwM $ BGInternal $
+            "Payload generator: no available outputs, probably utxo size is 1"
+        outputAddrs <- selectSomeFromList (1, maxOutputsN) notInputs
+
         let outputsN = length outputAddrs
 
         -- Select UTXOs belonging to one of input addresses and determine
@@ -210,8 +214,10 @@ genTxPayload = do
 
         -- Form a transaction
         let inputSKs = map addrToSk inputAddrs
-            hdwSigners = NE.fromList $ zip (map fakeSigner inputSKs) inputAddrs
-            makeTestTx = makeMPubKeyTxAddrs hdwSigners
+            signers = HM.fromList $ zip inputAddrs (map fakeSigner inputSKs)
+            getSigner addr =
+                fromMaybe (error "Requested signer for unknown address") $ HM.lookup addr signers
+            makeTestTx = makeMPubKeyTxAddrs getSigner
 
         eTx <- lift . lift $
             createGenericTx makeTestTx ownUtxo txOutAuxs changeAddrData
@@ -220,11 +226,8 @@ genTxPayload = do
         let tx = taTx txAux
         let txId = hash tx
         let txIns = _txInputs tx
-#ifdef WITH_EXPLORER
-        res <- lift . lift $ eTxProcessTransactionNoLock (txId, txAux)
-#else
-        res <- lift . lift $ txProcessTransactionNoLock (txId, txAux)
-#endif
+        -- @txpProcessTx@ for BlockGenMode should be non-blocking
+        res <- lift . lift $ txpProcessTx (txId, txAux)
         case res of
             Left e  -> error $ "genTransaction@txProcessTransaction: got left: " <> pretty e
             Right _ -> do
@@ -243,8 +246,10 @@ genTxPayload = do
 -- global state and mempool and add it to mempool.  Currently we are
 -- concerned only about tx payload, later we can add more stuff.
 genPayload ::
-       forall g m.
-       (RandomGen g, MonadBlockGenBase m)
+       forall ext g m.
+       ( RandomGen g
+       , MonadBlockGenBase m
+       , MonadTxpLocal (BlockGenMode ext m))
     => SlotId
-    -> BlockGenRandMode g m ()
+    -> BlockGenRandMode ext g m ()
 genPayload _ = genTxPayload

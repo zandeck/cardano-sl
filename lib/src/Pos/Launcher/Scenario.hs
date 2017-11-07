@@ -11,19 +11,23 @@ module Pos.Launcher.Scenario
 
 import           Universum
 
+import qualified Data.HashMap.Strict      as HM
 import           Data.Time.Units          (Second)
-import           Formatting               (build, int, sformat, shown, (%))
+import           Formatting               (bprint, build, int, sformat, shown, (%))
 import           Mockable                 (mapConcurrently, race)
 import           Serokell.Util.Text       (listJson)
 import           System.Exit              (ExitCode (..))
-import           System.Wlog              (WithLogger, getLoggerName, logInfo, logWarning)
+import           System.Wlog              (WithLogger, getLoggerName, logDebug, logInfo,
+                                           logWarning)
 
 import           Pos.Communication        (ActionSpec (..), OutSpecs, WorkerSpec,
                                            wrapActionSpec)
 import           Pos.Context              (getOurPublicKey, ncNetworkConfig)
-import           Pos.Core                 (GenesisData (gdBootStakeholders),
+import           Pos.Core                 (GenesisData (gdBootStakeholders, gdHeavyDelegation),
+                                           GenesisDelegation (..),
                                            GenesisWStakeholders (..), addressHash,
                                            gdFtsSeed, genesisData)
+import           Pos.Crypto               (pskDelegatePk)
 import qualified Pos.DB.DB                as DB
 import           Pos.DHT.Real             (KademliaDHTInstance (..),
                                            kademliaJoinNetworkNoThrow,
@@ -32,15 +36,15 @@ import qualified Pos.GState               as GS
 import           Pos.Launcher.Resource    (NodeResources (..))
 import           Pos.Lrc.DB               as LrcDB
 import           Pos.Network.Types        (NetworkConfig (..), topologyRunKademlia)
+import           Pos.NtpCheck             (NtpStatus (..), ntpSettings, withNtpCheck)
 import           Pos.Reporting            (reportError)
 import           Pos.Shutdown             (waitForShutdown)
 import           Pos.Slotting             (waitSystemStart)
-import           Pos.Ssc.Class            (SscConstraint)
 import           Pos.Txp                  (bootDustThreshold)
 import           Pos.Update.Configuration (HasUpdateConfiguration, curSoftwareVersion,
                                            lastKnownBlockVersion, ourSystemTag)
 import           Pos.Util                 (inAssertMode)
-import           Pos.Util.CompileInfo     (compileInfo)
+import           Pos.Util.CompileInfo     (HasCompileInfo, compileInfo)
 import           Pos.Util.LogSafe         (logInfoS)
 import           Pos.Worker               (allWorkers)
 import           Pos.WorkMode.Class       (WorkMode)
@@ -48,14 +52,14 @@ import           Pos.WorkMode.Class       (WorkMode)
 -- | Entry point of full node.
 -- Initialization, running of workers, running of plugins.
 runNode'
-    :: forall ssc ctx m.
-       ( WorkMode ssc ctx m
+    :: forall ext ctx m.
+       ( HasCompileInfo, WorkMode ctx m
        )
-    => NodeResources ssc m
+    => NodeResources ext m
     -> [WorkerSpec m]
     -> [WorkerSpec m]
     -> WorkerSpec m
-runNode' NodeResources {..} workers' plugins' = ActionSpec $ \vI sendActions -> do
+runNode' NodeResources {..} workers' plugins' = ActionSpec $ \vI sendActions -> ntpCheck $ do
     logInfo $ "Built with: " <> pretty compileInfo
     nodeStartMsg
     inAssertMode $ logInfo "Assert mode on"
@@ -83,6 +87,15 @@ runNode' NodeResources {..} workers' plugins' = ActionSpec $ \vI sendActions -> 
         (length $ getGenesisWStakeholders genesisStakeholders)
         bootDustThreshold
         genesisStakeholders
+
+    let genesisDelegation = gdHeavyDelegation genesisData
+    let formatDlgPair (issuerId, delegateId) =
+            bprint (build%" -> "%build) issuerId delegateId
+    logInfo $ sformat ("GenesisDelegation (stakeholder ids): "%listJson)
+            $ map (formatDlgPair . second (addressHash . pskDelegatePk))
+            $ HM.toList
+            $ unGenesisDelegation genesisDelegation
+
     firstGenesisHash <- GS.getFirstGenesisBlockHash
     logInfo $ sformat
         ("First genesis block hash: "%build%", genesis seed is "%build)
@@ -96,7 +109,7 @@ runNode' NodeResources {..} workers' plugins' = ActionSpec $ \vI sendActions -> 
             sformat ("Last known leaders for epoch "%build%" are: "%listJson)
                     lastKnownEpoch leaders
     LrcDB.getLeaders lastKnownEpoch >>= maybe onNoLeaders onLeaders
-    tipHeader <- DB.getTipHeader @ssc
+    tipHeader <- DB.getTipHeader
     logInfo $ sformat ("Current tip header: "%build) tipHeader
 
     waitSystemStart
@@ -122,14 +135,15 @@ runNode' NodeResources {..} workers' plugins' = ActionSpec $ \vI sendActions -> 
             sformat ("Worker/plugin with logger name "%shown%
                     " failed with exception: "%shown)
             loggerName e
+    ntpCheck = withNtpCheck $ ntpSettings onNtpStatusLogWarning
 
 -- | Entry point of full node.
 -- Initialization, running of workers, running of plugins.
-runNode ::
-       ( SscConstraint ssc
-       , WorkMode ssc ctx m
+runNode
+    :: ( HasCompileInfo
+       , WorkMode ctx m
        )
-    => NodeResources ssc m
+    => NodeResources ext m
     -> ([WorkerSpec m], OutSpecs)
     -> (WorkerSpec m, OutSpecs)
 runNode nr (plugins, plOuts) =
@@ -137,6 +151,16 @@ runNode nr (plugins, plOuts) =
   where
     (workers', wOuts) = allWorkers nr
     plugins' = map (wrapActionSpec "plugin") plugins
+
+onNtpStatusLogWarning :: WithLogger m => NtpStatus -> m ()
+onNtpStatusLogWarning = \case
+    NtpSyncOk -> logDebug $
+              -- putText  $ -- FIXME: for some reason this message isn't printed
+                            -- when using 'logDebug', but a simple 'putText' works
+                            -- just fine.
+        "Local time is in sync with the NTP server"
+    NtpDesync diff -> logWarning $
+        "Local time is severely off sync with the NTP server: " <> show diff
 
 -- | This function prints a very useful message when node is started.
 nodeStartMsg :: (HasUpdateConfiguration, WithLogger m) => m ()

@@ -52,6 +52,7 @@ import           Control.Arrow                    ((&&&))
 import           Control.Lens                     (ix, _Left)
 import           Control.Monad.Error.Class        (throwError)
 import qualified Data.ByteArray                   as BA
+import           Data.Default                     (Default (..))
 import           Data.Fixed                       (Micro, showFixed)
 import qualified Data.List.NonEmpty               as NE
 import           Data.Time.Clock.POSIX            (POSIXTime)
@@ -65,13 +66,12 @@ import           Pos.Crypto                       (Hash, hash)
 import           Pos.DB.Block                     (MonadBlockDB)
 import           Pos.DB.Class                     (MonadDBRead)
 import           Pos.DB.Rocks                     (MonadRealDB)
-import           Pos.Explorer                     (TxExtra (..))
+import           Pos.Explorer.Core                (TxExtra (..))
 import qualified Pos.GState                       as GS
 import           Pos.Lrc                          (getLeaders)
 import           Pos.Merkle                       (getMerkleRoot, mtRoot)
 import           Pos.Slotting                     (MonadSlots (..), getSlotStart)
-import           Pos.Ssc.GodTossing               (SscGodTossing)
-import           Pos.Ssc.GodTossing.Configuration (HasGtConfiguration)
+import           Pos.Ssc.Configuration            (HasSscConfiguration)
 import           Pos.Txp                          (Tx (..), TxId, TxOut (..),
                                                    TxOutAux (..), TxUndo, txpTxs,
                                                    _txOutputs)
@@ -199,15 +199,15 @@ data CBlockEntry = CBlockEntry
 
 toBlockEntry
     :: forall ctx m .
-    ( MonadBlockDB SscGodTossing m
+    ( MonadBlockDB m
     , MonadDBRead m
     , MonadRealDB ctx m
     , MonadSlots ctx m
     , MonadThrow m
     , HasConfiguration
-    , HasGtConfiguration
+    , HasSscConfiguration
     )
-    => (MainBlock SscGodTossing, Undo)
+    => (MainBlock, Undo)
     -> m CBlockEntry
 toBlockEntry (blk, Undo{..}) = do
 
@@ -245,7 +245,7 @@ toBlockEntry (blk, Undo{..}) = do
 -- Returning @Maybe@ is the simplest implementation for now, since it's hard
 -- to forsee what is and what will the state of leaders be at any given moment.
 getLeaderFromEpochSlot
-    :: (MonadBlockDB SscGodTossing m, MonadDBRead m, MonadRealDB ctx m)
+    :: (MonadBlockDB m, MonadDBRead m, MonadRealDB ctx m)
     => EpochIndex
     -> LocalSlotIndex
     -> m (Maybe StakeholderId)
@@ -291,15 +291,15 @@ data CBlockSummary = CBlockSummary
 
 toBlockSummary
     :: forall ctx m.
-    ( MonadBlockDB SscGodTossing m
+    ( MonadBlockDB m
     , MonadDBRead m
     , MonadRealDB ctx m
     , MonadSlots ctx m
     , MonadThrow m
     , HasConfiguration
-    , HasGtConfiguration
+    , HasSscConfiguration
     )
-    => (MainBlock SscGodTossing, Undo)
+    => (MainBlock, Undo)
     -> m CBlockSummary
 toBlockSummary blund@(blk, _) = do
     cbsEntry <- toBlockEntry blund
@@ -379,6 +379,9 @@ data CAddressesFilter =
     | NonRedeemedAddresses
     | AllAddresses
     deriving (Show, Generic)
+
+instance Default CAddressesFilter where
+    def = AllAddresses
 
 --------------------------------------------------------------------------------
 -- FromHttpApiData instances

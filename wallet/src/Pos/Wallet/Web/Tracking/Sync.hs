@@ -23,12 +23,16 @@ module Pos.Wallet.Web.Tracking.Sync
        , applyModifierToWallet
        , rollbackModifierFromWallet
        , BlockLockMode
+       , WalletTrackingEnv
 
        , syncWalletOnImport
        , txMempoolToModifier
 
        , fixingCachedAccModifier
        , fixCachedAccModifierFor
+
+       , buildTHEntryExtra
+       , isTxEntryInteresting
        ) where
 
 import           Universum
@@ -38,92 +42,92 @@ import           Control.Lens                     (to)
 import           Control.Monad.Catch              (handleAll)
 import qualified Data.DList                       as DL
 import qualified Data.HashMap.Strict              as HM
-import           Data.List                        ((!!))
 import qualified Data.List.NonEmpty               as NE
 import qualified Data.Map                         as M
 import           Ether.Internal                   (HasLens (..))
 import           Formatting                       (build, sformat, (%))
-import           Serokell.Util                    (enumerate)
 import           System.Wlog                      (HasLoggerName, WithLogger, logError,
                                                    logInfo, logWarning, modifyLoggerName)
 
 import           Pos.Block.Core                   (BlockHeader, getBlockHeader,
                                                    mainBlockTxPayload)
 import           Pos.Block.Types                  (Blund, undoTx)
-import           Pos.Client.Txp.History           (TxHistoryEntry (..))
-import           Pos.Core                         (Address (..), BlockHeaderStub,
-                                                   ChainDifficulty, HasConfiguration,
-                                                   HasDifficulty (..), HeaderHash,
-                                                   Timestamp, aaPkDerivationPath,
-                                                   addrAttributesUnwrapped,
+import           Pos.Client.Txp.History           (TxHistoryEntry (..),
+                                                   txHistoryListToMap)
+import           Pos.Core                         (BlockHeaderStub, ChainDifficulty,
+                                                   HasConfiguration, HasDifficulty (..),
+                                                   HeaderHash, Timestamp,
                                                    blkSecurityParam, genesisHash,
                                                    headerHash, headerSlotL,
-                                                   makeRootPubKeyAddress)
-import           Pos.Crypto                       (EncryptedSecretKey, HDPassphrase,
-                                                   WithHash (..), deriveHDPassphrase,
-                                                   encToPublic, hash, shortHashF,
-                                                   unpackHDAddressAttr)
+                                                   timestampToPosix)
+import           Pos.Crypto                       (EncryptedSecretKey, WithHash (..),
+                                                   shortHashF, withHash)
 import qualified Pos.DB.Block                     as DB
 import qualified Pos.DB.DB                        as DB
-import           Pos.DB.Rocks                     (MonadRealDB)
 import qualified Pos.GState                       as GS
 import           Pos.GState.BlockExtra            (foldlUpWhileM, resolveForwardLink)
 import           Pos.Slotting                     (MonadSlots (..), MonadSlotsData,
                                                    getSlotStartPure, getSystemStartM)
-import           Pos.Ssc.Class                    (SscHelpersClass)
 import           Pos.StateLock                    (Priority (..), StateLock,
                                                    withStateLockNoMetrics)
-import           Pos.Txp                          (MonadTxpMem, genesisUtxo,
-                                                   getLocalTxsNUndo, unGenesisUtxo)
-import           Pos.Txp.Core                     (Tx (..), TxAux (..), TxIn (..),
+import           Pos.Txp                          (GenesisUtxo (..), TxAux (..),
                                                    TxOutAux (..), TxUndo,
-                                                   flattenTxPayload, toaOut, topsortTxs,
-                                                   txOutAddress)
+                                                   flattenTxPayload, genesisUtxo, toaOut,
+                                                   topsortTxs, txOutAddress,
+                                                   utxoToModifier)
+import           Pos.Txp.MemState.Class           (MonadTxpMem, getLocalTxsNUndo)
 import           Pos.Util.Chrono                  (getNewestFirst)
 import           Pos.Util.LogSafe                 (logInfoS, logWarningS)
 import qualified Pos.Util.Modifier                as MM
 import           Pos.Util.Servant                 (encodeCType)
 
-import           Pos.Wallet.SscType               (WalletSscType)
+import           Pos.Wallet.WalletMode            (WalletMempoolExt)
 import           Pos.Wallet.Web.Account           (MonadKeySearch (..))
-import           Pos.Wallet.Web.ClientTypes       (Addr, CId, CWAddressMeta (..), Wal,
-                                                   encToCId, isTxLocalAddress)
+import           Pos.Wallet.Web.ClientTypes       (Addr, CId, CTxMeta (..),
+                                                   CWAddressMeta (..), Wal, encToCId,
+                                                   isTxLocalAddress)
 import           Pos.Wallet.Web.Error.Types       (WalletError (..))
 import           Pos.Wallet.Web.Pending.Types     (PtxBlockInfo, PtxCondition (PtxApplying, PtxInNewestBlocks))
 import           Pos.Wallet.Web.State             (AddressLookupMode (..),
-                                                   CustomAddressType (..), WalletTip (..),
-                                                   WebWalletModeDB)
+                                                   CustomAddressType (..), MonadWalletDB,
+                                                   WalletTip (..))
 import qualified Pos.Wallet.Web.State             as WS
+import           Pos.Wallet.Web.Tracking.Decrypt  (THEntryExtra (..), buildTHEntryExtra,
+                                                   eskToWalletDecrCredentials,
+                                                   isTxEntryInteresting,
+                                                   selectOwnAddresses)
 import           Pos.Wallet.Web.Tracking.Modifier (CAccModifier (..), CachedCAccModifier,
                                                    deleteAndInsertIMM, deleteAndInsertMM,
                                                    deleteAndInsertVM, indexedDeletions,
                                                    sortedInsertions)
-import           Pos.Wallet.Web.Util              (getWalletAddrMetas, sortWalletThByTime)
+import           Pos.Wallet.Web.Util              (getWalletAddrMetas)
 
-
-type BlockLockMode ssc ctx m =
+type BlockLockMode ctx m =
      ( WithLogger m
      , MonadReader ctx m
      , HasLens StateLock ctx StateLock
-     , MonadRealDB ctx m
-     , DB.MonadBlockDB ssc m
+     , DB.MonadBlockDB m
      , MonadMask m
      )
 
-type WalletTrackingEnv ext ctx m =
-     ( BlockLockMode WalletSscType ctx m
-     , WebWalletModeDB ctx m
-     , MonadTxpMem ext ctx m
-     , WS.MonadWalletWebDB ctx m
+type WalletTrackingEnvRead ctx m =
+     ( BlockLockMode ctx m
+     , MonadTxpMem WalletMempoolExt ctx m
+     , WS.MonadWalletDBRead ctx m
      , MonadSlotsData ctx m
      , WithLogger m
      , HasConfiguration
      )
 
-syncWalletOnImport :: WalletTrackingEnv ext ctx m => EncryptedSecretKey -> m ()
-syncWalletOnImport = syncWalletsWithGState @WalletSscType . one
+type WalletTrackingEnv ctx m =
+     ( WalletTrackingEnvRead ctx m
+     , MonadWalletDB ctx m
+     )
 
-txMempoolToModifier :: WalletTrackingEnv ext ctx m => EncryptedSecretKey -> m CAccModifier
+syncWalletOnImport :: WalletTrackingEnv ctx m => EncryptedSecretKey -> m ()
+syncWalletOnImport = syncWalletsWithGState . one
+
+txMempoolToModifier :: WalletTrackingEnvRead ctx m => EncryptedSecretKey -> m CAccModifier
 txMempoolToModifier encSK = do
     let wHash (i, TxAux {..}, _) = WithHash taTx i
         wId = encToCId encSK
@@ -139,12 +143,12 @@ txMempoolToModifier encSK = do
             logError errMsg
             throwM $ InternalError errMsg
 
-    tipH <- DB.getTipHeader @WalletSscType
+    tipH <- DB.getTipHeader
     allAddresses <- getWalletAddrMetas Ever wId
     case topsortTxs wHash txsWUndo of
-        Nothing -> mempty <$ logWarning "txMempoolToModifier: couldn't topsort mempool txs"
+        Nothing      -> mempty <$ logWarning "txMempoolToModifier: couldn't topsort mempool txs"
         Just ordered -> pure $
-            trackingApplyTxs @WalletSscType encSK allAddresses getDiff getTs getPtxBlkInfo $
+            trackingApplyTxs encSK allAddresses getDiff getTs getPtxBlkInfo $
             map (\(_, tx, undo) -> (tx, undo, tipH)) ordered
 
 ----------------------------------------------------------------------------
@@ -153,9 +157,9 @@ txMempoolToModifier encSK = do
 
 -- Iterate over blocks (using forward links) and actualize our accounts.
 syncWalletsWithGState
-    :: forall ssc ctx m.
-    ( WebWalletModeDB ctx m
-    , BlockLockMode ssc ctx m
+    :: forall ctx m.
+    ( MonadWalletDB ctx m
+    , BlockLockMode ctx m
     , MonadSlotsData ctx m
     , HasConfiguration
     )
@@ -173,10 +177,10 @@ syncWalletsWithGState encSKs = forM_ encSKs $ \encSK -> handleAll (onErr encSK) 
   where
     onErr encSK = logWarningS . sformat fmt (encToCId encSK)
     fmt = "Sync of wallet "%build%" failed: "%build
-    syncDo :: EncryptedSecretKey -> Maybe (BlockHeader ssc) -> m ()
+    syncDo :: EncryptedSecretKey -> Maybe BlockHeader -> m ()
     syncDo encSK wTipH = do
         let wdiff = maybe (0::Word32) (fromIntegral . ( ^. difficultyL)) wTipH
-        gstateTipH <- DB.getTipHeader @ssc
+        gstateTipH <- DB.getTipHeader
         -- If account's syncTip is before the current gstate's tip,
         -- then it loads accounts and addresses starting with @wHeader@.
         -- syncTip can be before gstate's the current tip
@@ -208,17 +212,17 @@ syncWalletsWithGState encSKs = forM_ encSKs $ \encSK -> handleAll (onErr encSK) 
 
 -- BE CAREFUL! This function iterates over blockchain, the blockchain can be large.
 syncWalletWithGStateUnsafe
-    :: forall ssc ctx m .
-    ( WebWalletModeDB ctx m
-    , DB.MonadBlockDB ssc m
+    :: forall ctx m .
+    ( MonadWalletDB ctx m
+    , DB.MonadBlockDB m
     , WithLogger m
     , MonadSlotsData ctx m
     , HasConfiguration
     )
     => EncryptedSecretKey      -- ^ Secret key for decoding our addresses
-    -> Maybe (BlockHeader ssc) -- ^ Block header corresponding to wallet's tip.
+    -> Maybe BlockHeader       -- ^ Block header corresponding to wallet's tip.
                                --   Nothing when wallet's tip is genesisHash
-    -> BlockHeader ssc         -- ^ GState header hash
+    -> BlockHeader             -- ^ GState header hash
     -> m ()
 syncWalletWithGStateUnsafe encSK wTipHeader gstateH = setLogger $ do
     systemStart  <- getSystemStartM
@@ -239,17 +243,17 @@ syncWalletWithGStateUnsafe encSK wTipHeader gstateH = setLogger $ do
         -- assuming that transactions are not created until syncing is complete
         ptxBlkInfo = const Nothing
 
-        rollbackBlock :: [CWAddressMeta] -> Blund ssc -> CAccModifier
+        rollbackBlock :: [CWAddressMeta] -> Blund -> CAccModifier
         rollbackBlock allAddresses (b, u) =
             trackingRollbackTxs encSK allAddresses mDiff blkHeaderTs $
             zip3 (gbTxs b) (undoTx u) (repeat $ getBlockHeader b)
 
-        applyBlock :: [CWAddressMeta] -> Blund ssc -> m CAccModifier
+        applyBlock :: [CWAddressMeta] -> Blund -> m CAccModifier
         applyBlock allAddresses (b, u) = pure $
             trackingApplyTxs encSK allAddresses mDiff blkHeaderTs ptxBlkInfo $
             zip3 (gbTxs b) (undoTx u) (repeat $ getBlockHeader b)
 
-        computeAccModifier :: BlockHeader ssc -> m CAccModifier
+        computeAccModifier :: BlockHeader -> m CAccModifier
         computeAccModifier wHeader = do
             allAddresses <- getWalletAddrMetas Ever wAddr
             logInfoS $
@@ -264,7 +268,7 @@ syncWalletWithGStateUnsafe encSK wTipHeader gstateH = setLogger $ do
                      -- We don't load blocks explicitly, because blockain can be long.
                      maybe (pure mempty)
                          (\wNextH ->
-                            foldlUpWhileM (applyBlock allAddresses) wNextH loadCond mappendR mempty)
+                            foldlUpWhileM DB.blkGetBlund (applyBlock allAddresses) wNextH loadCond mappendR mempty)
                          =<< resolveForwardLink wHeader
                | diff gstateH < diff wHeader -> do
                      -- This rollback can occur
@@ -275,14 +279,14 @@ syncWalletWithGStateUnsafe encSK wTipHeader gstateH = setLogger $ do
                | otherwise -> mempty <$ logInfoS (sformat ("Wallet "%build%" is already synced") wAddr)
 
     whenNothing_ wTipHeader $ do
-        let encInfo = getEncInfo encSK
+        let wdc = eskToWalletDecrCredentials encSK
             ownGenesisData =
-                selectOwnAccounts encInfo (txOutAddress . toaOut . snd) $
+                selectOwnAddresses wdc (txOutAddress . toaOut . snd) $
                 M.toList $ unGenesisUtxo genesisUtxo
             ownGenesisUtxo = M.fromList $ map fst ownGenesisData
             ownGenesisAddrs = map snd ownGenesisData
         mapM_ WS.addWAddress ownGenesisAddrs
-        WS.getWalletUtxo >>= WS.setWalletUtxo . (ownGenesisUtxo <>)
+        WS.updateWalletBalancesAndUtxo (utxoToModifier ownGenesisUtxo)
 
     startFromH <- maybe firstGenesisHeader pure wTipHeader
     mapModifier@CAccModifier{..} <- computeAccModifier startFromH
@@ -294,67 +298,42 @@ syncWalletWithGStateUnsafe encSK wTipHeader gstateH = setLogger $ do
                 %shortHashF%", "%build)
                 wAddr (maybe genesisHash headerHash wTipHeader) mapModifier
   where
-    firstGenesisHeader :: m (BlockHeader ssc)
+    firstGenesisHeader :: m BlockHeader
     firstGenesisHeader = resolveForwardLink (genesisHash @BlockHeaderStub) >>=
         maybe (error "Unexpected state: genesisHash doesn't have forward link")
             (maybe (error "No genesis block corresponding to header hash") pure <=< DB.blkGetHeader)
-
--- TODO: @pva701: maybe it would be needed, dunno
--- runWithWalletUtxo
---     :: (MonadReader ctx m, HasLens GenesisUtxo ctx GenesisUtxo, WebWalletModeDB ctx m)
---     => ToilT () (DBToil m) a
---     -> m a
--- runWithWalletUtxo action = do
---     walletUtxo <- WS.getWalletUtxo
---     runDBToil $ fst <$> runToilTLocal (fromUtxo walletUtxo) def mempty action
 
 -- Process transactions on block application,
 -- decrypt our addresses, and add/delete them to/from wallet-db.
 -- Addresses are used in TxIn's will be deleted,
 -- in TxOut's will be added.
 trackingApplyTxs
-    :: forall ssc . (HasConfiguration, SscHelpersClass ssc)
+    :: HasConfiguration
     => EncryptedSecretKey                          -- ^ Wallet's secret key
     -> [CWAddressMeta]                             -- ^ All addresses in wallet
-    -> (BlockHeader ssc -> Maybe ChainDifficulty)  -- ^ Function to determine tx chain difficulty
-    -> (BlockHeader ssc -> Maybe Timestamp)        -- ^ Function to determine tx timestamp in history
-    -> (BlockHeader ssc -> Maybe PtxBlockInfo)     -- ^ Function to determine pending tx's block info
-    -> [(TxAux, TxUndo, BlockHeader ssc)]          -- ^ Txs of blocks and corresponding header hash
+    -> (BlockHeader -> Maybe ChainDifficulty)      -- ^ Function to determine tx chain difficulty
+    -> (BlockHeader -> Maybe Timestamp)            -- ^ Function to determine tx timestamp in history
+    -> (BlockHeader -> Maybe PtxBlockInfo)         -- ^ Function to determine pending tx's block info
+    -> [(TxAux, TxUndo, BlockHeader)]              -- ^ Txs of blocks and corresponding header hash
     -> CAccModifier
-trackingApplyTxs (getEncInfo -> encInfo) allAddresses getDiff getTs getPtxBlkInfo txs =
+trackingApplyTxs (eskToWalletDecrCredentials -> wdc) allAddresses getDiff getTs getPtxBlkInfo txs =
     foldl' applyTx mempty txs
   where
-    toTxInOut txid (idx, out) = (TxInUtxo txid idx, TxOutAux out)
-
-    applyTx :: CAccModifier -> (TxAux, TxUndo, BlockHeader ssc) -> CAccModifier
-    applyTx CAccModifier{..} (TxAux {..}, undo, blkHeader) =
+    applyTx :: CAccModifier -> (TxAux, TxUndo, BlockHeader) -> CAccModifier
+    applyTx CAccModifier{..} (tx, undo, blkHeader) = do
         let hh = headerHash blkHeader
-            mDiff = getDiff blkHeader
-            mTs = getTs blkHeader
             hhs = repeat hh
-            tx@(UnsafeTx (NE.toList -> inps) (NE.toList -> outs) _) = taTx
-            !txId = hash tx
-            -- TODO should we do something with unknown inputs?
-            resolvedInputs = catMaybes $ zipWith (fmap . (,)) inps (NE.toList undo)
-            txOutgoings = map txOutAddress outs
-            txInputs = map (toaOut . snd) resolvedInputs
+            wh@(WithHash _ txId) = withHash (taTx tx)
+        let thee@THEntryExtra{..} =
+                buildTHEntryExtra wdc (wh, undo) (getDiff blkHeader, getTs blkHeader)
 
-            ownInputs = selectOwnAccounts encInfo (txOutAddress . toaOut . snd) resolvedInputs
-            ownOutputs = selectOwnAccounts encInfo (txOutAddress . snd) $
-                enumerate outs
-            ownInpAddrMetas = map snd ownInputs
-            ownOutAddrMetas = map snd ownOutputs
-            ownTxIns = map (fst . fst) ownInputs
-            ownTxOuts = map (toTxInOut txId . fst) ownOutputs
+            ownTxIns = map (fst . fst) theeInputs
+            ownTxOuts = map fst theeOutputs
 
-            addedHistory =
-                if (not $ null ownOutputs) || (not $ null ownInputs)
-                then DL.cons (THEntry txId tx mDiff txInputs txOutgoings mTs)
-                     camAddedHistory
-                else camAddedHistory
+            addedHistory = maybe camAddedHistory (flip DL.cons camAddedHistory) (isTxEntryInteresting thee)
 
-            usedAddrs = map cwamId ownOutAddrMetas
-            changeAddrs = evalChange allAddresses (map cwamId ownInpAddrMetas) usedAddrs
+            usedAddrs = map (cwamId . snd) theeOutputs
+            changeAddrs = evalChange allAddresses (map (cwamId . snd) theeInputs) usedAddrs
 
             mPtxBlkInfo = getPtxBlkInfo blkHeader
             addedPtxCandidates =
@@ -362,8 +341,8 @@ trackingApplyTxs (getEncInfo -> encInfo) allAddresses getDiff getTs getPtxBlkInf
                      -> DL.cons (txId, ptxBlkInfo) camAddedPtxCandidates
                    | otherwise
                      -> camAddedPtxCandidates
-        in CAccModifier
-            (deleteAndInsertIMM [] ownOutAddrMetas camAddresses)
+        CAccModifier
+            (deleteAndInsertIMM [] (map snd theeOutputs) camAddresses)
             (deleteAndInsertVM [] (zip usedAddrs hhs) camUsed)
             (deleteAndInsertVM [] (zip changeAddrs hhs) camChange)
             (deleteAndInsertMM ownTxIns ownTxOuts camUtxo)
@@ -373,67 +352,46 @@ trackingApplyTxs (getEncInfo -> encInfo) allAddresses getDiff getTs getPtxBlkInf
             camDeletedPtxCandidates
 
 -- Process transactions on block rollback.
--- Like @trackingApplyTx@, but vise versa.
+-- Like @trackingApplyTxs@, but vise versa.
 trackingRollbackTxs
-    :: forall ssc . (HasConfiguration, SscHelpersClass ssc)
+    :: HasConfiguration
     => EncryptedSecretKey -- ^ Wallet's secret key
-    -> [CWAddressMeta] -- ^ All adresses
-    -> (BlockHeader ssc -> Maybe ChainDifficulty)  -- ^ Function to determine tx chain difficulty
-    -> (BlockHeader ssc -> Maybe Timestamp)        -- ^ Function to determine tx timestamp in history
-    -> [(TxAux, TxUndo, BlockHeader ssc)] -- ^ Txs of blocks and corresponding header hash
+    -> [CWAddressMeta]    -- ^ All addresses
+    -> (BlockHeader -> Maybe ChainDifficulty)  -- ^ Function to determine tx chain difficulty
+    -> (BlockHeader -> Maybe Timestamp)        -- ^ Function to determine tx timestamp in history
+    -> [(TxAux, TxUndo, BlockHeader)] -- ^ Txs of blocks and corresponding header hash
     -> CAccModifier
-trackingRollbackTxs (getEncInfo -> encInfo) allAddress getDiff getTs txs =
+trackingRollbackTxs (eskToWalletDecrCredentials -> wdc) allAddress getDiff getTs txs =
     foldl' rollbackTx mempty txs
   where
-    rollbackTx :: CAccModifier -> (TxAux, TxUndo, BlockHeader ssc) -> CAccModifier
-    rollbackTx CAccModifier{..} (TxAux {..}, NE.toList -> undoL, blkHeader) = do
-        let hh = headerHash blkHeader
+    rollbackTx :: CAccModifier -> (TxAux, TxUndo, BlockHeader) -> CAccModifier
+    rollbackTx CAccModifier{..} (tx, undo, blkHeader) = do
+        let wh@(WithHash _ txId) = withHash (taTx tx)
+            hh = headerHash blkHeader
             hhs = repeat hh
-            mDiff = getDiff blkHeader
-            mTs = getTs blkHeader
-            tx@(UnsafeTx (NE.toList -> inps) (NE.toList -> outs) _) = taTx
-            !txid = hash taTx
-            undoL' = catMaybes undoL
-            resolvedInputs = zip inps undoL'
-            txOutgoings = map txOutAddress outs
-            txInputs = map (toaOut . snd) resolvedInputs
+            thee@THEntryExtra{..} =
+                buildTHEntryExtra wdc (wh, undo) (getDiff blkHeader, getTs blkHeader)
 
-            ownInputs = selectOwnAccounts encInfo (txOutAddress . toaOut) undoL'
-            ownOutputs = selectOwnAccounts encInfo txOutAddress $ outs
-            ownInputMetas = map snd ownInputs
-            ownOutputMetas = map snd ownOutputs
-            ownInputAddrs = map cwamId ownInputMetas
-            ownOutputAddrs = map cwamId ownOutputMetas
-
-            l = fromIntegral (length outs) :: Word32
-            ownTxIns = zip inps $ map fst ownInputs
-            ownTxOuts = map (TxInUtxo txid) ([0 .. l - 1] :: [Word32])
-
-            th = THEntry txid tx mDiff txInputs txOutgoings mTs
-
-            deletedHistory =
-                if (not $ null ownInputAddrs) || (not $ null ownOutputAddrs)
-                then DL.snoc camDeletedHistory th
-                else camDeletedHistory
-
-            deletedPtxCandidates = DL.cons (txid, th) camDeletedPtxCandidates
+            ownTxOutIns = map (fst . fst) theeOutputs
+            deletedHistory = maybe camDeletedHistory (DL.snoc camDeletedHistory) (isTxEntryInteresting thee)
+            deletedPtxCandidates = DL.cons (txId, theeTxEntry) camDeletedPtxCandidates
 
         -- Rollback isn't needed, because we don't use @utxoGet@
         -- (undo contains all required information)
-        let usedAddrs = map cwamId ownOutputMetas
-            changeAddrs = evalChange allAddress ownInputAddrs ownOutputAddrs
+        let usedAddrs = map (cwamId . snd) theeOutputs
+            changeAddrs = evalChange allAddress (map (cwamId . snd) theeInputs) usedAddrs
         CAccModifier
-            (deleteAndInsertIMM ownOutputMetas [] camAddresses)
+            (deleteAndInsertIMM (map snd theeOutputs) [] camAddresses)
             (deleteAndInsertVM (zip usedAddrs hhs) [] camUsed)
             (deleteAndInsertVM (zip changeAddrs hhs) [] camChange)
-            (deleteAndInsertMM ownTxOuts ownTxIns camUtxo)
+            (deleteAndInsertMM ownTxOutIns (map fst theeInputs) camUtxo)
             camAddedHistory
             deletedHistory
             camAddedPtxCandidates
             deletedPtxCandidates
 
 applyModifierToWallet
-    :: WebWalletModeDB ctx m
+    :: MonadWalletDB ctx m
     => CId Wal
     -> HeaderHash
     -> CAccModifier
@@ -443,11 +401,13 @@ applyModifierToWallet wid newTip CAccModifier{..} = do
     mapM_ WS.addWAddress (sortedInsertions camAddresses)
     mapM_ (WS.addCustomAddress UsedAddr . fst) (MM.insertions camUsed)
     mapM_ (WS.addCustomAddress ChangeAddr . fst) (MM.insertions camChange)
-    WS.getWalletUtxo >>= WS.setWalletUtxo . MM.modifyMap camUtxo
-    oldCachedHist <- fromMaybe [] <$> WS.getHistoryCache wid
-    sortedAddedHistory <-
-        getNewestFirst <$> sortWalletThByTime wid (DL.toList camAddedHistory)
-    WS.updateHistoryCache wid $ sortedAddedHistory <> oldCachedHist
+    WS.updateWalletBalancesAndUtxo camUtxo
+    let cMetas = M.fromList
+               $ mapMaybe (\THEntry {..} -> (\mts -> (_thTxId, CTxMeta . timestampToPosix $ mts)) <$> _thTimestamp)
+               $ DL.toList camAddedHistory
+    WS.addOnlyNewTxMetas wid cMetas
+    let addedHistory = txHistoryListToMap $ DL.toList camAddedHistory
+    WS.insertIntoHistoryCache wid addedHistory
     -- resubmitting worker can change ptx in db nonatomically, but
     -- tracker has priority over the resubmiter, thus do not use CAS here
     forM_ camAddedPtxCandidates $ \(txid, ptxBlkInfo) ->
@@ -455,7 +415,7 @@ applyModifierToWallet wid newTip CAccModifier{..} = do
     WS.setWalletSyncTip wid newTip
 
 rollbackModifierFromWallet
-    :: (WebWalletModeDB ctx m, MonadSlots ctx m)
+    :: (MonadWalletDB ctx m, MonadSlots ctx m)
     => CId Wal
     -> HeaderHash
     -> CAccModifier
@@ -465,28 +425,15 @@ rollbackModifierFromWallet wid newTip CAccModifier{..} = do
     mapM_ WS.removeWAddress (indexedDeletions camAddresses)
     mapM_ (WS.removeCustomAddress UsedAddr) (MM.deletions camUsed)
     mapM_ (WS.removeCustomAddress ChangeAddr) (MM.deletions camChange)
-    WS.getWalletUtxo >>= WS.setWalletUtxo . MM.modifyMap camUtxo
+    WS.updateWalletBalancesAndUtxo camUtxo
     forM_ camDeletedPtxCandidates $ \(txid, poolInfo) -> do
         curSlot <- getCurrentSlotInaccurate
         WS.ptxUpdateMeta wid txid (WS.PtxResetSubmitTiming curSlot)
         WS.setPtxCondition wid txid (PtxApplying poolInfo)
-    WS.getHistoryCache wid >>= \case
-        Nothing -> pure ()
-        Just oldCachedHist -> do
-            sortedDeletedHistory <-
-                getNewestFirst <$> sortWalletThByTime wid (DL.toList camDeletedHistory)
-            WS.updateHistoryCache wid $
-                removeFromHead sortedDeletedHistory oldCachedHist
+        let deletedHistory = txHistoryListToMap (DL.toList camDeletedHistory)
+        WS.removeFromHistoryCache wid deletedHistory
+        WS.removeWalletTxMetas wid (map encodeCType $ M.keys deletedHistory)
     WS.setWalletSyncTip wid newTip
-  where
-    removeFromHead :: [TxHistoryEntry] -> [TxHistoryEntry] -> [TxHistoryEntry]
-    removeFromHead [] ths = ths
-    removeFromHead _ [] = []
-    removeFromHead (dTh : dThes) (th : thes) =
-        if _thTxId dTh == _thTxId th
-        then removeFromHead dThes thes
-        else error "rollbackModifierFromWallet: removeFromHead: \
-                   \rollbacked tx ID is not present in history cache!"
 
 evalChange
     :: [CWAddressMeta] -- ^ All adresses
@@ -497,30 +444,8 @@ evalChange allAddresses inputs outputs
     | null inputs || null outputs = []
     | otherwise = filter (isTxLocalAddress allAddresses (NE.fromList inputs)) outputs
 
-getEncInfo :: EncryptedSecretKey -> (HDPassphrase, CId Wal)
-getEncInfo encSK = do
-    let pubKey = encToPublic encSK
-    let hdPass = deriveHDPassphrase pubKey
-    let wCId = encodeCType $ makeRootPubKeyAddress pubKey
-    (hdPass, wCId)
-
-selectOwnAccounts
-    :: (HDPassphrase, CId Wal)
-    -> (a -> Address)
-    -> [a]
-    -> [(a, CWAddressMeta)]
-selectOwnAccounts encInfo getAddr =
-    mapMaybe (\a -> (a,) <$> decryptAccount encInfo (getAddr a))
-
 setLogger :: HasLoggerName m => m a -> m a
 setLogger = modifyLoggerName (<> "wallet" <> "sync")
-
-decryptAccount :: (HDPassphrase, CId Wal) -> Address -> Maybe CWAddressMeta
-decryptAccount (hdPass, wCId) addr = do
-    hdPayload <- aaPkDerivationPath $ addrAttributesUnwrapped addr
-    derPath <- unpackHDAddressAttr hdPass hdPayload
-    guard $ length derPath == 2
-    pure $ CWAddressMeta wCId (derPath !! 0) (derPath !! 1) (encodeCType addr)
 
 ----------------------------------------------------------------------------
 -- Cached modifier
@@ -529,14 +454,14 @@ decryptAccount (hdPass, wCId) addr = do
 -- | Evaluates `txMempoolToModifier` and provides result as a parameter
 -- to given function.
 fixingCachedAccModifier
-    :: (WalletTrackingEnv ext ctx m, MonadKeySearch key m)
+    :: (WalletTrackingEnvRead ctx m, MonadKeySearch key m)
     => (CachedCAccModifier -> key -> m a)
     -> key -> m a
 fixingCachedAccModifier action key =
     findKey key >>= txMempoolToModifier >>= flip action key
 
 fixCachedAccModifierFor
-    :: (WalletTrackingEnv ext ctx m, MonadKeySearch key m)
+    :: (WalletTrackingEnvRead ctx m, MonadKeySearch key m)
     => key
     -> (CachedCAccModifier -> m a)
     -> m a

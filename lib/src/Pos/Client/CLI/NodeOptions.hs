@@ -27,10 +27,9 @@ import           Text.PrettyPrint.ANSI.Leijen (Doc)
 import           Paths_cardano_sl             (version)
 
 import           Pos.Client.CLI.Options       (CommonArgs (..), commonArgsParser,
-                                               optionalJSONPath, sscAlgoOption)
+                                               optionalJSONPath)
 import           Pos.HealthCheck.Route53      (route53HealthCheckOption)
 import           Pos.Network.CLI              (NetworkConfigOpts, networkConfigOption)
-import           Pos.Ssc.SscAlgo              (SscAlgo (..))
 import           Pos.Statistics               (EkgParams, StatsdParams, ekgParamsOption,
                                                statsdParamsOption)
 import           Pos.Util.BackupPhrase        (BackupPhrase, backupPhraseWordsNum)
@@ -39,7 +38,7 @@ import           Pos.Util.CompileInfo         (CompileTimeInfo (..), HasCompileI
 import           Pos.Util.TimeWarp            (NetworkAddress)
 
 data CommonNodeArgs = CommonNodeArgs
-    { dbPath                 :: !FilePath
+    { dbPath                 :: !(Maybe FilePath)
     , rebuildDB              :: !Bool
     -- these two arguments are only used in development mode
     , devGenesisSecretI      :: !(Maybe Int)
@@ -61,10 +60,9 @@ data CommonNodeArgs = CommonNodeArgs
 
 commonNodeArgsParser :: Parser CommonNodeArgs
 commonNodeArgsParser = do
-    dbPath <- strOption $
+    dbPath <- optional $ strOption $
         long    "db-path" <>
         metavar "FILEPATH" <>
-        value   "node-db" <>
         help    "Path to directory with all DBs used by the node. \
                 \If specified path doesn’t exist, a directory will be created."
     rebuildDB <- switch $
@@ -121,14 +119,12 @@ commonNodeArgsParser = do
 data SimpleNodeArgs = SimpleNodeArgs CommonNodeArgs NodeArgs
 
 data NodeArgs = NodeArgs
-    { sscAlgo            :: !SscAlgo
-    , behaviorConfigPath :: !(Maybe FilePath)
+    { behaviorConfigPath :: !(Maybe FilePath)
     } deriving Show
 
 simpleNodeArgsParser :: Parser SimpleNodeArgs
 simpleNodeArgsParser = do
     commonNodeArgs <- commonNodeArgsParser
-    sscAlgo <- sscAlgoOption
     behaviorConfigPath <- behaviorConfigOption
     pure $ SimpleNodeArgs commonNodeArgs NodeArgs{..}
 

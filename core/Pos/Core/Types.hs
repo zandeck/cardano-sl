@@ -311,7 +311,7 @@ data SoftforkRule = SoftforkRule
     -- this one).
     , srThdDecrement :: !CoinPortion
     -- ^ Theshold will be decreased by this value after each epoch.
-    } deriving (Show, Eq, Generic)
+    } deriving (Show, Eq, Ord, Generic)
 
 instance Hashable SoftforkRule
 
@@ -331,14 +331,14 @@ data BlockVersionData = BlockVersionData
     , bvdSoftforkRule      :: !SoftforkRule
     , bvdTxFeePolicy       :: !TxFeePolicy
     , bvdUnlockStakeEpoch  :: !EpochIndex
-    } deriving (Show, Eq, Generic, Typeable)
+    } deriving (Show, Eq, Ord, Generic, Typeable)
 
 ----------------------------------------------------------------------------
 -- HeaderHash
 ----------------------------------------------------------------------------
 
--- | 'Hash' of block header. This should be @Hash (BlockHeader ssc)@
--- but we don't want to have @ssc@ in 'HeaderHash' type.
+-- | 'Hash' of block header. This should be @Hash BlockHeader@
+-- but 'BlockHeader' is not defined in core.
 type HeaderHash = Hash BlockHeaderStub
 data BlockHeaderStub
 

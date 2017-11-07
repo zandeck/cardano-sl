@@ -1,5 +1,6 @@
-{-# LANGUAGE Rank2Types   #-}
-{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE Rank2Types          #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeFamilies        #-}
 
 -- | Transaction submission logic
 
@@ -8,6 +9,7 @@ module Pos.Wallet.Web.Pending.Submission
     , ptxFirstSubmissionHandler
     , ptxResubmissionHandler
 
+    , TxSubmissionMode
     , submitAndSavePtx
     ) where
 
@@ -18,13 +20,14 @@ import           Formatting                       (build, sformat, shown, stext,
 import           System.Wlog                      (WithLogger, logInfo)
 
 import           Pos.Client.Txp.History           (saveTx)
-import           Pos.Communication                (EnqueueMsg, submitTxRaw)
+import           Pos.Communication                (TxMode)
 import           Pos.Util.LogSafe                 (logInfoS, logWarningS)
-import           Pos.Wallet.Web.Mode              (MonadWalletWebMode)
+import           Pos.Wallet.Web.Networking        (MonadWalletSendActions (..))
 import           Pos.Wallet.Web.Pending.Functions (isReclaimableFailure)
 import           Pos.Wallet.Web.Pending.Types     (PendingTx (..), PtxCondition (..),
                                                    PtxPoolInfo)
-import           Pos.Wallet.Web.State             (PtxMetaUpdate (PtxMarkAcknowledged),
+import           Pos.Wallet.Web.State             (MonadWalletDB,
+                                                   PtxMetaUpdate (PtxMarkAcknowledged),
                                                    addOnlyNewPendingTx, casPtxCondition,
                                                    ptxUpdateMeta)
 
@@ -59,7 +62,7 @@ ptxFirstSubmissionHandler =
                 \transaction made"
 
 ptxResubmissionHandler
-    :: MonadWalletWebMode m
+    :: forall ctx m. (MonadThrow m, WithLogger m, MonadWalletDB ctx m)
     => PendingTx -> PtxSubmissionHandlers m
 ptxResubmissionHandler PendingTx{..} =
     PtxSubmissionHandlers
@@ -77,7 +80,7 @@ ptxResubmissionHandler PendingTx{..} =
     }
   where
     cancelPtx
-        :: (MonadWalletWebMode m, Exception e, Buildable e)
+        :: (Exception e, Buildable e)
         => PtxPoolInfo -> e -> m ()
     cancelPtx poolInfo e = do
         let newCond = PtxWontApply (sformat build e) poolInfo
@@ -104,13 +107,19 @@ ptxResubmissionHandler PendingTx{..} =
             \this transaction has unexpected condition "%build)
             _ptxTxId _ptxCond
 
+type TxSubmissionMode ctx m =
+    ( TxMode m
+    , MonadWalletSendActions m
+    , MonadWalletDB ctx m
+    )
+
 -- | Like 'Pos.Communication.Tx.submitAndSaveTx',
 -- but treats tx as future /pending/ transaction.
 submitAndSavePtx
-    :: MonadWalletWebMode m
-    => PtxSubmissionHandlers m -> EnqueueMsg m -> PendingTx -> m ()
-submitAndSavePtx PtxSubmissionHandlers{..} enqueue ptx@PendingTx{..} = do
-    ack <- submitTxRaw enqueue _ptxTxAux
+    :: TxSubmissionMode ctx m
+    => PtxSubmissionHandlers m -> PendingTx -> m ()
+submitAndSavePtx PtxSubmissionHandlers{..} ptx@PendingTx{..} = do
+    ack <- sendTxToNetwork _ptxTxAux
     saveTx (_ptxTxId, _ptxTxAux) `catches` handlers ack
     addOnlyNewPendingTx ptx
     when ack $ ptxUpdateMeta _ptxWallet _ptxTxId PtxMarkAcknowledged

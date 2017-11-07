@@ -11,6 +11,7 @@ module Test.Pos.Lrc.WorkerSpec
 import           Universum
 
 import           Control.Lens              (At (at), Index, _Right)
+import           Data.Default              (def)
 import qualified Data.HashMap.Strict       as HM
 import           Formatting                (build, sformat, (%))
 import           Serokell.Util             (listJson)
@@ -22,10 +23,10 @@ import           Test.QuickCheck.Monadic   (pick)
 import           Pos.Binary.Class          (serialize')
 import           Pos.Block.Core            (mainBlockTxPayload)
 import           Pos.Block.Logic           (applyBlocksUnsafe)
+import           Pos.Block.Slog            (ShouldCallBListener (..))
 import           Pos.Core                  (Coin, EpochIndex, GenesisData (..),
                                             GenesisInitializer (..), StakeholderId,
-                                            TestnetBalanceOptions (..),
-                                            TestnetDistribution (..), addressHash,
+                                            TestnetBalanceOptions (..), addressHash,
                                             blkSecurityParam, coinF, genesisData,
                                             genesisSecretKeysPoor, genesisSecretKeysRich)
 import           Pos.Crypto                (SecretKey, toPublic)
@@ -33,6 +34,7 @@ import qualified Pos.GState                as GS
 import           Pos.Launcher              (HasConfigurations)
 import qualified Pos.Lrc                   as Lrc
 import           Pos.Txp                   (TxAux, mkTxPayload)
+import           Pos.Util.CompileInfo      (HasCompileInfo, withCompileInfo)
 import           Pos.Util.Util             (getKeys)
 
 import           Test.Pos.Block.Logic.Mode (BlockProperty, TestParams (..),
@@ -47,7 +49,7 @@ spec :: Spec
 -- Currently we want to run it only 4 times, because there is no
 -- much randomization (its effect is likely negligible) and
 -- performance matters (but not very much, so we can run more than once).
-spec = withStaticConfigurations $
+spec = withStaticConfigurations $ withCompileInfo def $
     describe "Lrc.Worker" $ modifyMaxSuccess (const 4) $ do
         describe "lrcSingleShot" $ do
             prop lrcCorrectnessDesc $
@@ -74,10 +76,9 @@ genGenesisInitializer :: Gen GenesisInitializer
 genGenesisInitializer = do
     tiTestBalance <- genTestnetBalanceOptions
     tiFakeAvvmBalance <- arbitrary
-    -- It's important to use 'TestnetRichmenStakeDistr' because later
-    -- we assert that all richmen according to 'TestnetBalanceOptions'
-    -- are indeed richmen according to LRC.
-    let tiDistribution = TestnetRichmenStakeDistr
+    tiAvvmBalanceFactor <- arbitrary
+    -- Currently these tests don't work well with genesis delegation.
+    let tiUseHeavyDlg = False
     tiSeed <- arbitrary
     return TestnetInitializer {..}
   where
@@ -107,7 +108,7 @@ genGenesisInitializer = do
 -- Actual test
 ----------------------------------------------------------------------------
 
-lrcCorrectnessProp :: HasConfigurations => BlockProperty ()
+lrcCorrectnessProp :: (HasConfigurations,HasCompileInfo) => BlockProperty ()
 lrcCorrectnessProp = do
     let k = blkSecurityParam
     -- This value is how many blocks we need to generate first. We
@@ -220,12 +221,12 @@ checkRichmen = do
                  %coinF%", total stake is "%coinF)
                 poorGuyStake totalStake
 
-genAndApplyBlockFixedTxs :: HasConfigurations => [TxAux] -> BlockProperty ()
+genAndApplyBlockFixedTxs :: (HasConfigurations,HasCompileInfo) => [TxAux] -> BlockProperty ()
 genAndApplyBlockFixedTxs txs = do
     let txPayload = mkTxPayload txs
     emptyBlund <- bpGenBlock (EnableTxPayload False) (InplaceDB False)
     let blund = emptyBlund & _1 . _Right . mainBlockTxPayload .~ txPayload
-    lift $ applyBlocksUnsafe (one blund) Nothing
+    lift $ applyBlocksUnsafe (ShouldCallBListener False)(one blund) Nothing
 
 -- TODO: we can't change stake in bootstrap era!
 -- This part should be implemented in CSL-1450.

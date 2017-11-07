@@ -52,6 +52,9 @@ instance HasCustomSwagger TestReset where
         "Delete all secret keys. It works in development mode only, \
         \returns HTTP 403 otherwise."
 
+instance HasCustomSwagger TestState where
+    swaggerModifier = modifyDescription "Print wallet state as JSON"
+
 instance HasCustomSwagger GetWallet where
     swaggerModifier = modifyDescription
         "Get information about a wallet by its ID (address)."
@@ -184,6 +187,10 @@ instance HasCustomSwagger GetSyncProgress where
         "Sync progress, with info about local chain difficulty,\
         \network chain difficulty and connected peers."
 
+instance HasCustomSwagger LocalTimeDifference where
+    swaggerModifier = modifyDescription
+        "Get local time difference in milliseconds."
+
 
 instance HasCustomSwagger ImportBackupJSON where
     swaggerModifier = modifyDescription
@@ -194,3 +201,7 @@ instance HasCustomSwagger ExportBackupJSON where
         "Export full information about wallet in JSON format into a file under \
         \given path. Wallet may be later restored from this file with \
         \'ImportBackupJSON' endpoint."
+
+instance HasCustomSwagger GetClientInfo where
+    swaggerModifier = modifyDescription
+        "Get general information about this service."

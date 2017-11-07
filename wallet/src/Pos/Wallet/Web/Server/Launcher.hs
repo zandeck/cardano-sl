@@ -23,13 +23,15 @@ import           Servant.Server                   (Handler, Server, serve)
 import           Servant.Utils.Enter              ((:~>) (..))
 
 import qualified Data.ByteString.Char8            as BS8
-import           Pos.Communication                (OutSpecs, SendActions (..), sendTxOuts)
+import           Pos.Communication                (OutSpecs, sendTxOuts)
 import           Pos.Launcher.Configuration       (HasConfigurations)
+import           Pos.Util.CompileInfo             (HasCompileInfo)
 import           Pos.Util.TimeWarp                (NetworkAddress)
-import           Pos.Wallet.SscType               (WalletSscType)
 import           Pos.Wallet.Web.Account           (findKey, myRootAddresses)
 import           Pos.Wallet.Web.Api               (WalletSwaggerApi, swaggerWalletApi)
-import           Pos.Wallet.Web.Mode              (MonadWalletWebMode)
+import           Pos.Wallet.Web.Mode              (MonadFullWalletWebMode,
+                                                   MonadWalletWebMode,
+                                                   MonadWalletWebSockets)
 import           Pos.Wallet.Web.Pending           (startPendingTxsResubmitter)
 import           Pos.Wallet.Web.Server.Handlers   (servantHandlersWithSwagger)
 import           Pos.Wallet.Web.Sockets           (ConnectionsVar, closeWSConnections,
@@ -43,16 +45,15 @@ import           Pos.Web                          (TlsParams, serveImpl)
 -- TODO [CSM-407]: Mixture of logic seems to be here
 
 walletServeImpl
-    :: MonadWalletWebMode m
+    :: MonadWalletWebMode ctx m
     => m Application     -- ^ Application getter
     -> NetworkAddress    -- ^ IP and port to listen
     -> Maybe TlsParams
     -> m ()
-walletServeImpl app (ip, port) =
-    serveImpl app (BS8.unpack ip) port
+walletServeImpl app (ip, port) = serveImpl app (BS8.unpack ip) port
 
 walletApplication
-    :: MonadWalletWebMode m
+    :: (HasCompileInfo, MonadWalletWebMode ctx m, MonadWalletWebSockets ctx m)
     => m (Server WalletSwaggerApi)
     -> m Application
 walletApplication serv = do
@@ -60,17 +61,16 @@ walletApplication serv = do
     upgradeApplicationWS wsConn . serve swaggerWalletApi <$> serv
 
 walletServer
-    :: forall m.
-       ( MonadWalletWebMode m )
-    => SendActions m
-    -> m (m :~> Handler)
+    :: forall ctx m.
+       ( MonadFullWalletWebMode ctx m )
+    => m (m :~> Handler)
     -> m (Server WalletSwaggerApi)
-walletServer sendActions natM = do
+walletServer natM = do
     nat <- natM
-    syncWalletsWithGState @WalletSscType =<< mapM findKey =<< myRootAddresses
-    startPendingTxsResubmitter sendActions
+    syncWalletsWithGState =<< mapM findKey =<< myRootAddresses
+    startPendingTxsResubmitter
     launchNotifier nat
-    return $ servantHandlersWithSwagger sendActions nat
+    return $ servantHandlersWithSwagger nat
 
 bracketWalletWebDB
     :: ( MonadIO m

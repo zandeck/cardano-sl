@@ -13,8 +13,8 @@ import           Test.Hspec.QuickCheck (prop)
 import           Pos.Arbitrary.Infra   ()
 import qualified Pos.Communication     as C
 
-import           Test.Pos.CborSpec     (extensionProperty)
-import           Test.Pos.Util         (binaryTest)
+import           Test.Pos.Cbor.CborSpec (extensionProperty)
+import           Test.Pos.Helpers      (binaryTest)
 
 spec :: Spec
 spec = describe "Communication" $ do

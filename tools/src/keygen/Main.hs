@@ -19,23 +19,23 @@ import           System.Wlog            (Severity (Debug), WithLogger, consoleOu
 import qualified Text.JSON.Canonical    as CanonicalJSON
 
 import           Pos.Binary             (asBinary, serialize')
+import qualified Pos.Client.CLI         as CLI
 import           Pos.Core               (CoreConfiguration (..),
                                          GenesisConfiguration (..),
                                          GenesisInitializer (..), addressHash, ccGenesis,
                                          coreConfiguration, generateFakeAvvm,
-                                         generateSecrets, generatedSecrets, gsInitializer,
+                                         generateRichSecrets, gsInitializer,
                                          mkVssCertificate, vcSigningKey, vssMaxTTL)
 import           Pos.Crypto             (EncryptedSecretKey (..), SecretKey (..),
                                          VssKeyPair, hashHexF, noPassEncrypt,
                                          redeemPkB64F, toPublic, toVssPublicKey)
 import           Pos.Launcher           (HasConfigurations, withConfigurations)
 import           Pos.Util.UserSecret    (readUserSecret, takeUserSecret, usKeys,
-                                         usPrimKey, usVss, usWalletSet,
-                                         writeUserSecretRelease)
-import           Pos.Wallet.Web.Secret  (wusRootKey)
+                                         usPrimKey, usVss, usWallet,
+                                         writeUserSecretRelease, wusRootKey)
 
 import           Dump                   (dumpFakeAvvmSeed, dumpGeneratedGenesisData,
-                                         dumpKeyfile)
+                                         dumpRichSecrets)
 import           KeygenOptions          (DumpAvvmSeedsOptions (..), GenKeysOptions (..),
                                          KeygenCommand (..), KeygenOptions (..),
                                          getKeygenOptions)
@@ -60,8 +60,8 @@ rearrange msk = mapM_ rearrangeKeyfile =<< liftIO (glob msk)
 
 genPrimaryKey :: (HasConfigurations, MonadIO m, MonadThrow m, WithLogger m, MonadRandom m) => FilePath -> m ()
 genPrimaryKey path = do
-    sk <- liftIO $ generateSecrets Nothing
-    void $ dumpKeyfile True path sk
+    rs <- liftIO generateRichSecrets
+    dumpRichSecrets path rs
     logInfo $ "Successfully generated primary key " <> (toText path)
 
 readKey :: (MonadIO m, MonadThrow m, WithLogger m) => FilePath -> m ()
@@ -72,7 +72,7 @@ readKey path = do
                     view usPrimKey us
     logInfo $ maybe "No wallet set"
                     (("Wallet set: " <>) . showKeyWithAddressHash . decryptESK . view wusRootKey) $
-                    view usWalletSet us
+                    view usWallet us
     logInfo $ "Keys: " <> (T.concat $ L.intersperse "\n" $
                            map (showKeyWithAddressHash . decryptESK) $
                            view usKeys us)
@@ -126,8 +126,6 @@ generateKeysByGenesis GenKeysOptions{..} = do
             MainnetInitializer{}   -> error "Can't generate keys for MainnetInitializer"
             TestnetInitializer{..} -> do
                 dumpGeneratedGenesisData (gkoOutDir, gkoKeyPattern)
-                                         tiTestBalance
-                                         (fromMaybe (error "No secrets for genesis") generatedSecrets)
                 logInfo (toText gkoOutDir <> " generated successfully")
 
 genVssCert
@@ -155,7 +153,7 @@ genVssCert path = do
 main :: IO ()
 main = do
     KeygenOptions{..} <- getKeygenOptions
-    setupLogging $ consoleOutB & lcTermSeverity ?~ Debug
+    setupLogging Nothing $ consoleOutB & lcTermSeverity ?~ Debug
     usingLoggerName "keygen" $ withConfigurations koConfigurationOptions $ do
         logInfo "Processing command"
         case koCommand of
@@ -165,3 +163,4 @@ main = do
             ReadKey path            -> readKey path
             DumpAvvmSeeds opts      -> dumpAvvmSeeds opts
             GenerateKeysBySpec gkbg -> generateKeysByGenesis gkbg
+            DumpGenesisData {..}    -> CLI.dumpGenesisData dgdCanonical dgdPath

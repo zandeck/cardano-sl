@@ -16,6 +16,7 @@ import           Universum                      hiding (on)
 
 import qualified Control.Concurrent.STM         as STM
 import           Control.Lens                   ((<<.=))
+import           Control.Monad.State.Class      (MonadState (..))
 import qualified Data.Set                       as S
 import           Data.Time.Units                (Millisecond)
 import           Ether.TaggedTrans              ()
@@ -28,23 +29,21 @@ import           Network.SocketIO               (RoutingTable, Socket,
                                                  appendDisconnectHandler, initialize,
                                                  socketId)
 import           Network.Wai                    (Application, Middleware, Request,
-                                                 Response, pathInfo,
-                                                 responseLBS)
+                                                 Response, pathInfo, responseLBS)
 import           Network.Wai.Handler.Warp       (Settings, defaultSettings, runSettings,
                                                  setPort)
 import           Network.Wai.Middleware.Cors    (CorsResourcePolicy, cors, corsOrigins,
                                                  simpleCorsResourcePolicy)
-import           System.Wlog                    (CanLog, LoggerName, NamedPureLogger,
-                                                 WithLogger, getLoggerName, logDebug,
-                                                 logInfo, logWarning, modifyLoggerName,
-                                                 usingLoggerName)
 import           Serokell.Util.Text             (listJson)
+import           System.Wlog                    (CanLog, HasLoggerName, LoggerName,
+                                                 NamedPureLogger, WithLogger,
+                                                 getLoggerName, logDebug, logInfo,
+                                                 logWarning, modifyLoggerName,
+                                                 usingLoggerName)
 
 import           Pos.Block.Types                (Blund)
 import           Pos.Core                       (addressF)
 import qualified Pos.GState                     as DB
-import           Pos.Ssc.Class                  (SscHelpersClass)
-import           Pos.Ssc.GodTossing             (SscGodTossing)
 
 import           Pos.Explorer.Aeson.ClientTypes ()
 import           Pos.Explorer.Socket.Holder     (ConnectionsState, ConnectionsVar,
@@ -75,6 +74,13 @@ toConfig :: NotifierSettings -> LoggerName -> Settings
 toConfig NotifierSettings{..} _ =
    setPort (fromIntegral nsPort) defaultSettings
 
+newtype NotifierLogger a = NotifierLogger { runNotifierLogger :: NamedPureLogger (StateT ConnectionsState STM) a }
+                         deriving (Functor, Applicative, Monad, CanLog, HasLoggerName, MonadThrow)
+
+instance MonadState ConnectionsState NotifierLogger where
+    get = NotifierLogger $ lift get
+    put newState = NotifierLogger $ lift (put newState)
+
 notifierHandler
     :: (MonadState RoutingTable m, MonadReader Socket m, CanLog m, MonadIO m)
     => ConnectionsVar -> LoggerName -> m ()
@@ -92,7 +98,7 @@ notifierHandler connVar loggerName = do
  where
     -- handlers provide context for logging and `ConnectionsVar` changes
     asHandler
-        :: (a -> SocketId -> (NamedPureLogger $ StateT ConnectionsState STM) ())
+        :: (a -> SocketId -> NotifierLogger ())
         -> a
         -> ReaderT Socket IO ()
     asHandler f arg = inHandlerCtx . f arg . socketId =<< ask
@@ -101,11 +107,11 @@ notifierHandler connVar loggerName = do
 
     inHandlerCtx
         :: (MonadIO m, CanLog m)
-        => NamedPureLogger (StateT ConnectionsState STM) a
+        => NotifierLogger a
         -> m ()
     inHandlerCtx =
         -- currently @NotifierError@s aren't caught
-        void . usingLoggerName loggerName . withConnState connVar
+        void . usingLoggerName loggerName . withConnState connVar . runNotifierLogger
 
 notifierServer
     :: (MonadIO m, WithLogger m, MonadCatch m, WithLogger m)
@@ -152,8 +158,8 @@ notifierServer notifierSettings connVar = do
         "404 - Not Found"
 
 periodicPollChanges
-    :: forall ssc ctx m.
-       (ExplorerMode ctx m, SscHelpersClass ssc)
+    :: forall ctx m.
+       (ExplorerMode ctx m)
     => ConnectionsVar -> m Bool -> m ()
 periodicPollChanges connVar closed =
     -- Runs every 5 seconds.
@@ -165,7 +171,7 @@ periodicPollChanges connVar closed =
         wasMempoolTxs <- _2 <<.= mempoolTxs
 
         lift . askingConnState connVar $ do
-            mNewBlunds :: Maybe [Blund SscGodTossing] <-
+            mNewBlunds :: Maybe [Blund] <-
                 if mWasBlock == Just curBlock
                     then return Nothing
                     else forM mWasBlock $ \wasBlock -> do
@@ -183,7 +189,7 @@ periodicPollChanges connVar closed =
                 logDebug $ sformat ("Blockchain updated ("%int%" blocks)")
                     (length newBlunds)
 
-            newBlockchainTxs <- lift $ concat <$> forM newBlunds (getBlockTxs @SscGodTossing @ctx . fst)
+            newBlockchainTxs <- lift $ concatForM newBlunds (getBlockTxs @ctx . fst)
             let newLocalTxs = S.toList $ mempoolTxs `S.difference` wasMempoolTxs
 
             let allTxs = newBlockchainTxs <> newLocalTxs
@@ -204,11 +210,11 @@ periodicPollChanges connVar closed =
 
 -- | Starts notification server. Kill current thread to stop it.
 notifierApp
-    :: forall ssc ctx m.
-       (ExplorerMode ctx m, SscHelpersClass ssc)
+    :: forall ctx m.
+       (ExplorerMode ctx m)
     => NotifierSettings -> m ()
 notifierApp settings = modifyLoggerName (<> "notifier.socket-io") $ do
     logInfo "Starting"
     connVar <- liftIO $ STM.newTVarIO mkConnectionsState
-    forkAccompanion (periodicPollChanges @ssc connVar)
+    forkAccompanion (periodicPollChanges connVar)
                     (notifierServer settings connVar)

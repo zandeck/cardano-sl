@@ -7,11 +7,10 @@ module Pos.WorkMode
        ( WorkMode
        , MinWorkMode
 
-       , TxpExtra_TMP
-
        -- * Actual modes
        , RealMode
        , RealModeContext(..)
+       , EmptyMempoolExt
 
        , OQ
        , EnqueuedConversation (..)
@@ -19,179 +18,200 @@ module Pos.WorkMode
 
 import           Universum
 
-import           Control.Lens           (makeLensesWith)
-import qualified Control.Monad.Reader   as Mtl
-import           Ether.Internal         (HasLens (..))
-import           Mockable               (Production)
-import           System.Wlog            (HasLoggerName (..), LoggerName)
+import           Control.Lens            (makeLensesWith)
+import qualified Control.Monad.Reader    as Mtl
+import           Ether.Internal          (HasLens (..))
+import           Mockable                (Production)
+import           System.Wlog             (HasLoggerName (..), LoggerName)
 
-import           Pos.Block.BListener    (MonadBListener (..), onApplyBlocksStub,
-                                         onRollbackBlocksStub)
-import           Pos.Block.Core         (Block, BlockHeader)
-import           Pos.Block.Slog.Types   (HasSlogContext (..), HasSlogGState (..))
-import           Pos.Block.Types        (Undo)
-import           Pos.Context            (HasNodeContext (..), HasPrimaryKey (..),
-                                         HasSscContext (..), NodeContext)
-import           Pos.Core               (HasConfiguration, IsHeader)
-import           Pos.DB                 (MonadGState (..), NodeDBs)
-import           Pos.DB.Block           (dbGetBlockDefault, dbGetBlockSscDefault,
-                                         dbGetHeaderDefault, dbGetHeaderSscDefault,
-                                         dbGetUndoDefault, dbGetUndoSscDefault,
-                                         dbPutBlundDefault)
-import           Pos.DB.Class           (MonadBlockDBGeneric (..),
-                                         MonadBlockDBGenericWrite (..), MonadDB (..),
-                                         MonadDBRead (..))
-import           Pos.DB.DB              (gsAdoptedBVDataDefault)
-import           Pos.DB.Rocks           (dbDeleteDefault, dbGetDefault,
-                                         dbIterSourceDefault, dbPutDefault,
-                                         dbWriteBatchDefault)
-import           Pos.Delegation.Class   (DelegationVar)
+import           Pos.Block.BListener     (MonadBListener (..), onApplyBlocksStub,
+                                          onRollbackBlocksStub)
+import           Pos.Block.Core          (Block, BlockHeader)
+import           Pos.Block.Slog.Types    (HasSlogContext (..), HasSlogGState (..))
+import           Pos.Block.Types         (Undo)
+import           Pos.Context             (HasNodeContext (..), HasPrimaryKey (..),
+                                          HasSscContext (..), NodeContext)
+import           Pos.Core                (HasConfiguration, IsHeader)
+import           Pos.DB                  (MonadGState (..), NodeDBs)
+import           Pos.DB.Block            (dbGetBlockDefault, dbGetBlockSscDefault,
+                                          dbGetHeaderDefault, dbGetHeaderSscDefault,
+                                          dbGetUndoDefault, dbGetUndoSscDefault,
+                                          dbPutBlundDefault)
+import           Pos.DB.Class            (MonadBlockDBGeneric (..),
+                                          MonadBlockDBGenericWrite (..), MonadDB (..),
+                                          MonadDBRead (..))
+import           Pos.DB.DB               (gsAdoptedBVDataDefault)
+import           Pos.DB.Rocks            (dbDeleteDefault, dbGetDefault,
+                                          dbIterSourceDefault, dbPutDefault,
+                                          dbWriteBatchDefault)
+import           Pos.Delegation.Class    (DelegationVar)
+import           Pos.DHT.Real.Types      (KademliaDHTInstance)
 import           Pos.Infra.Configuration (HasInfraConfiguration)
-import           Pos.KnownPeers         (MonadFormatPeers (..), MonadKnownPeers (..))
-import           Pos.Reporting          (HasReportingContext (..))
-import           Pos.Shutdown           (HasShutdownContext (..))
-import           Pos.Slotting.Class     (MonadSlots (..))
-import           Pos.Slotting.Impl.Sum  (currentTimeSlottingSum,
-                                         getCurrentSlotBlockingSum,
-                                         getCurrentSlotInaccurateSum, getCurrentSlotSum)
-import           Pos.Slotting.MemState  (HasSlottingVar (..), MonadSlotsData)
-import           Pos.Ssc.Class.Helpers  (SscHelpersClass)
-import           Pos.Ssc.Class.Types    (SscBlock)
-import           Pos.Ssc.Extra          (SscMemTag, SscState)
-import           Pos.Txp.MemState       (GenericTxpLocalData, TxpHolderTag)
-import           Pos.Util               (Some (..))
-import           Pos.Util.JsonLog       (HasJsonLogConfig (..), JsonLogConfig,
-                                         jsonLogDefault)
-import           Pos.Util.LoggerName    (HasLoggerName' (..), getLoggerNameDefault,
-                                         modifyLoggerNameDefault)
-import           Pos.Util.OutboundQueue (EnqueuedConversation (..), OQ)
-import qualified Pos.Util.OutboundQueue as OQ.Reader
-import           Pos.Util.TimeWarp      (CanJsonLog (..))
-import           Pos.Util.UserSecret    (HasUserSecret (..))
-import           Pos.Util.Util          (postfixLFields)
-import           Pos.WorkMode.Class     (MinWorkMode, TxpExtra_TMP, WorkMode)
+import           Pos.KnownPeers          (MonadFormatPeers (..), MonadKnownPeers (..))
+import           Pos.Network.Types       (HasNodeType (..), getNodeTypeDefault)
+import           Pos.Reporting           (HasReportingContext (..))
+import           Pos.Shutdown            (HasShutdownContext (..))
+import           Pos.Slotting.Class      (MonadSlots (..))
+import           Pos.Slotting.Impl.Sum   (currentTimeSlottingSum,
+                                          getCurrentSlotBlockingSum,
+                                          getCurrentSlotInaccurateSum, getCurrentSlotSum)
+import           Pos.Slotting.MemState   (HasSlottingVar (..), MonadSlotsData)
+import           Pos.Ssc.Mem             (SscMemTag)
+import           Pos.Ssc.Types           (SscBlock, SscState)
+import           Pos.Txp                 (GenericTxpLocalData, MempoolExt,
+                                          MonadTxpLocal (..), TxpHolderTag, txNormalize,
+                                          txProcessTransaction)
+import           Pos.Util                (Some (..))
+import           Pos.Util.CompileInfo    (HasCompileInfo)
+import           Pos.Util.JsonLog        (HasJsonLogConfig (..), JsonLogConfig,
+                                          jsonLogDefault)
+import           Pos.Util.LoggerName     (HasLoggerName' (..), getLoggerNameDefault,
+                                          modifyLoggerNameDefault)
+import           Pos.Util.OutboundQueue  (EnqueuedConversation (..), OQ)
+import qualified Pos.Util.OutboundQueue  as OQ.Reader
+import           Pos.Util.TimeWarp       (CanJsonLog (..))
+import           Pos.Util.UserSecret     (HasUserSecret (..))
+import           Pos.Util.Util           (postfixLFields)
+import           Pos.WorkMode.Class      (MinWorkMode, WorkMode)
 
 
-data RealModeContext ssc = RealModeContext
+data RealModeContext ext = RealModeContext
     { rmcNodeDBs       :: !NodeDBs
-    , rmcSscState      :: !(SscState ssc)
-    , rmcTxpLocalData  :: !(GenericTxpLocalData TxpExtra_TMP)
+    , rmcSscState      :: !SscState
+    , rmcTxpLocalData  :: !(GenericTxpLocalData ext)
     , rmcDelegationVar :: !DelegationVar
     , rmcJsonLogConfig :: !JsonLogConfig
     , rmcLoggerName    :: !LoggerName
-    , rmcNodeContext   :: !(NodeContext ssc)
-    , rmcOutboundQ     :: !(OQ (RealMode ssc))
+    , rmcNodeContext   :: !NodeContext
+    , rmcOutboundQ     :: !(OQ (RealMode ext))
     }
 
-type RealMode ssc = Mtl.ReaderT (RealModeContext ssc) Production
+type EmptyMempoolExt = ()
+
+type RealMode ext = Mtl.ReaderT (RealModeContext ext) Production
 
 makeLensesWith postfixLFields ''RealModeContext
 
-instance HasLens NodeDBs (RealModeContext ssc) NodeDBs where
+instance HasLens NodeDBs (RealModeContext ext) NodeDBs where
     lensOf = rmcNodeDBs_L
 
-instance HasLens SscMemTag (RealModeContext ssc) (SscState ssc) where
+instance HasLens NodeContext (RealModeContext ext) NodeContext where
+    lensOf = rmcNodeContext_L
+
+instance HasLens SscMemTag (RealModeContext ext) SscState where
     lensOf = rmcSscState_L
 
-instance HasLens TxpHolderTag (RealModeContext ssc) (GenericTxpLocalData TxpExtra_TMP) where
+instance HasLens TxpHolderTag (RealModeContext ext) (GenericTxpLocalData ext) where
     lensOf = rmcTxpLocalData_L
 
-instance HasLens DelegationVar (RealModeContext ssc) DelegationVar where
+instance HasLens DelegationVar (RealModeContext ext) DelegationVar where
     lensOf = rmcDelegationVar_L
 
+instance HasNodeType (RealModeContext ext) where
+    getNodeType = getNodeTypeDefault @KademliaDHTInstance
+
 instance {-# OVERLAPPABLE #-}
-    HasLens tag (NodeContext ssc) r =>
-    HasLens tag (RealModeContext ssc) r
+    HasLens tag NodeContext r =>
+    HasLens tag (RealModeContext ext) r
   where
     lensOf = rmcNodeContext_L . lensOf @tag
 
-instance HasSscContext ssc (RealModeContext ssc) where
+instance HasSscContext (RealModeContext ext) where
     sscContext = rmcNodeContext_L . sscContext
 
-instance HasPrimaryKey (RealModeContext ssc) where
+instance HasPrimaryKey (RealModeContext ext) where
     primaryKey = rmcNodeContext_L . primaryKey
 
-instance HasReportingContext (RealModeContext ssc) where
+instance HasReportingContext (RealModeContext ext) where
     reportingContext = rmcNodeContext_L . reportingContext
 
-instance HasUserSecret (RealModeContext ssc) where
+instance HasUserSecret (RealModeContext ext) where
     userSecret = rmcNodeContext_L . userSecret
 
-instance HasShutdownContext (RealModeContext ssc) where
+instance HasShutdownContext (RealModeContext ext) where
     shutdownContext = rmcNodeContext_L . shutdownContext
 
-instance HasSlottingVar (RealModeContext ssc) where
+instance HasSlottingVar (RealModeContext ext) where
     slottingTimestamp = rmcNodeContext_L . slottingTimestamp
     slottingVar = rmcNodeContext_L . slottingVar
 
-instance HasSlogContext (RealModeContext ssc) where
+instance HasSlogContext (RealModeContext ext) where
     slogContext = rmcNodeContext_L . slogContext
 
-instance HasSlogGState (RealModeContext ssc) where
+instance HasSlogGState (RealModeContext ext) where
     slogGState = slogContext . scGState
 
-instance HasNodeContext ssc (RealModeContext ssc) where
+instance HasNodeContext (RealModeContext ext) where
     nodeContext = rmcNodeContext_L
 
-instance HasLoggerName' (RealModeContext ssc) where
+instance HasLoggerName' (RealModeContext ext) where
     loggerName = rmcLoggerName_L
 
-instance HasJsonLogConfig (RealModeContext ssc) where
+instance HasJsonLogConfig (RealModeContext ext) where
     jsonLogConfig = rmcJsonLogConfig_L
 
-instance {-# OVERLAPPING #-} HasLoggerName (RealMode ssc) where
+instance {-# OVERLAPPING #-} HasLoggerName (RealMode ext) where
     getLoggerName = getLoggerNameDefault
     modifyLoggerName = modifyLoggerNameDefault
 
-instance {-# OVERLAPPING #-} CanJsonLog (RealMode ssc) where
+instance {-# OVERLAPPING #-} CanJsonLog (RealMode ext) where
     jsonLog = jsonLogDefault
 
-instance (HasConfiguration, HasInfraConfiguration, MonadSlotsData ctx (RealMode ssc))
-      => MonadSlots ctx (RealMode ssc)
+instance (HasConfiguration, HasInfraConfiguration, MonadSlotsData ctx (RealMode ext))
+      => MonadSlots ctx (RealMode ext)
   where
     getCurrentSlot = getCurrentSlotSum
     getCurrentSlotBlocking = getCurrentSlotBlockingSum
     getCurrentSlotInaccurate = getCurrentSlotInaccurateSum
     currentTimeSlotting = currentTimeSlottingSum
 
-instance HasConfiguration => MonadGState (RealMode ssc) where
+instance HasConfiguration => MonadGState (RealMode ext) where
     gsAdoptedBVData = gsAdoptedBVDataDefault
 
-instance HasConfiguration => MonadDBRead (RealMode ssc) where
+instance HasConfiguration => MonadDBRead (RealMode ext) where
     dbGet = dbGetDefault
     dbIterSource = dbIterSourceDefault
 
-instance HasConfiguration => MonadDB (RealMode ssc) where
+instance HasConfiguration => MonadDB (RealMode ext) where
     dbPut = dbPutDefault
     dbWriteBatch = dbWriteBatchDefault
     dbDelete = dbDeleteDefault
 
-instance MonadBListener (RealMode ssc) where
+instance MonadBListener (RealMode ext) where
     onApplyBlocks = onApplyBlocksStub
     onRollbackBlocks = onRollbackBlocksStub
 
 instance
-    (HasConfiguration, SscHelpersClass ssc) =>
-    MonadBlockDBGeneric (BlockHeader ssc) (Block ssc) Undo (RealMode ssc)
+    HasConfiguration =>
+    MonadBlockDBGeneric BlockHeader Block Undo (RealMode ext)
   where
-    dbGetBlock  = dbGetBlockDefault @ssc
-    dbGetUndo   = dbGetUndoDefault @ssc
-    dbGetHeader = dbGetHeaderDefault @ssc
+    dbGetBlock  = dbGetBlockDefault
+    dbGetUndo   = dbGetUndoDefault
+    dbGetHeader = dbGetHeaderDefault
 
 instance
-    (HasConfiguration, SscHelpersClass ssc) =>
-    MonadBlockDBGeneric (Some IsHeader) (SscBlock ssc) () (RealMode ssc)
+    HasConfiguration =>
+    MonadBlockDBGeneric (Some IsHeader) SscBlock () (RealMode ext)
   where
-    dbGetBlock  = dbGetBlockSscDefault @ssc
-    dbGetUndo   = dbGetUndoSscDefault @ssc
-    dbGetHeader = dbGetHeaderSscDefault @ssc
+    dbGetBlock  = dbGetBlockSscDefault
+    dbGetUndo   = dbGetUndoSscDefault
+    dbGetHeader = dbGetHeaderSscDefault
 
-instance (HasConfiguration, SscHelpersClass ssc) =>
-         MonadBlockDBGenericWrite (BlockHeader ssc) (Block ssc) Undo (RealMode ssc) where
+instance
+    HasConfiguration =>
+    MonadBlockDBGenericWrite BlockHeader Block Undo (RealMode ext)
+  where
     dbPutBlund = dbPutBlundDefault
 
-instance MonadKnownPeers (RealMode ssc) where
+instance MonadKnownPeers (RealMode ext) where
     updatePeersBucket = OQ.Reader.updatePeersBucketReader rmcOutboundQ
 
-instance MonadFormatPeers (RealMode scc) where
+instance MonadFormatPeers (RealMode ext) where
     formatKnownPeers = OQ.Reader.formatKnownPeersReader rmcOutboundQ
+
+type instance MempoolExt (RealMode ext) = ext
+
+instance (HasConfiguration, HasInfraConfiguration, HasCompileInfo) =>
+         MonadTxpLocal (RealMode ()) where
+    txpNormalize = txNormalize
+    txpProcessTx = txProcessTransaction

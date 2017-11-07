@@ -6,17 +6,14 @@ module Pos.Lrc.Consumers
          allLrcConsumers
        ) where
 
-import           Universum
-
 import           Pos.Delegation.Lrc    (delegationLrcConsumer)
 import           Pos.Lrc.Consumer      (LrcConsumer)
 import           Pos.Lrc.Mode          (LrcMode)
-import           Pos.Ssc.Class.Workers (SscWorkersClass (sscLrcConsumers))
+import           Pos.Ssc.Lrc           (sscLrcConsumer)
+import           Pos.Ssc.Message       (SscMessageConstraints)
 import           Pos.Update.Lrc        (usLrcConsumer)
 
 allLrcConsumers
-    :: forall ssc ctx m.
-       (LrcMode ssc ctx m, SscWorkersClass ssc)
+    :: forall ctx m. (SscMessageConstraints, LrcMode ctx m)
     => [LrcConsumer m]
-allLrcConsumers = [delegationLrcConsumer, usLrcConsumer] ++
-                  sscLrcConsumers @ssc
+allLrcConsumers = [delegationLrcConsumer, usLrcConsumer, sscLrcConsumer]
