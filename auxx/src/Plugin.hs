@@ -70,6 +70,8 @@ auxxPlugin AuxxOptions{..} = \case
 
 runWalletCmd :: (HasConfigurations, HasCompileInfo) => Text -> Worker AuxxMode
 runWalletCmd line sendActions = do
+    printAction "Running command: "
+    printAction $ "\t" <> line
     let commandProcs = createCommandProcs printAction sendActions
     expr <- eitherToThrow $ Lang.parse line
     value <- eitherToThrow =<< Lang.evaluate commandProcs expr

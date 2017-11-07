@@ -393,8 +393,10 @@ createCommandProcs printAction sendActions = fix $ \commands -> [
         if akpPrimary then do
             let primSk = fromMaybe (error "Primary key not found") (secret ^. usPrimKey)
             addSecretKey $ noPassEncrypt primSk
-        else
-            mapM_ addSecretKey $ secret ^. usKeys
+        else do
+            let ks = secret ^. usKeys
+            printAction $ sformat ("Adding "%build%" secret keys") (length ks)
+            mapM_ addSecretKey ks
         return ValueUnit
     , cpHelp = ""
     },

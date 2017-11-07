@@ -33,7 +33,7 @@ propHandlesValidInput = property $ liftA2 (==) (tokenize . detokenize) identity
 unitLexerSample1 :: Expectation
 unitLexerSample1 = tokenize input `shouldBe` output
   where
-    input  = " ( \"Hello\"; [=propose-patak-update ./secret.key /home/a\\ b] \"\\\"\"  ) "
+    input  = " ( \"Hello\"; [=propose-patak-update ./secret.key /home/a_b\\ b-c] \"\\\"\"  ) "
     output =
         [ TokenParenthesis BracketSideOpening
         , TokenString "Hello"
@@ -42,7 +42,7 @@ unitLexerSample1 = tokenize input `shouldBe` output
         , TokenEquals
         , TokenName $ unsafeMkName ["propose", "patak", "update"]
         , TokenFilePath "./secret.key"
-        , TokenFilePath "/home/a b"
+        , TokenFilePath "/home/a_b b-c"
         , TokenSquareBracket BracketSideClosing
         , TokenString "\""
         , TokenParenthesis BracketSideClosing
