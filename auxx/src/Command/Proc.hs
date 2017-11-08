@@ -10,7 +10,7 @@ import           Universum
 import           Data.List                  ((!!))
 import qualified Data.Map                   as Map
 import           Formatting                 (build, int, sformat, stext, (%))
-import           System.Wlog                (logError, logInfo)
+import           System.Wlog                (logError, logInfo, logWarning)
 import qualified Text.JSON.Canonical        as CanonicalJSON
 
 import           Pos.Client.KeyStorage      (addSecretKey, getSecretKeysPlain)
@@ -371,13 +371,14 @@ createCommandProcs printAction sendActions = fix $ \commands -> [
 
     CommandProc
     { cpName = "add-key-pool"
-    , cpArgumentConsumer = getArg tyInt "i"
-    , cpExec = \i -> do
+    , cpArgumentConsumer = getArgMany tyInt "i"
+    , cpExec = \is -> do
+        when (null is) $ logWarning "Not adding keys from pool (list is empty)"
         CmdCtx {..} <- getCmdCtx
         let secrets = fromMaybe (error "Secret keys are unknown") genesisSecretKeys
-            key = secrets !! i
-        evaluateNF_ key
-        addSecretKey $ noPassEncrypt key
+        forM_ is $ \i -> do
+            key <- evaluateNF $ secrets !! i
+            addSecretKey $ noPassEncrypt key
         return ValueUnit
     , cpHelp = ""
     },
