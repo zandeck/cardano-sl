@@ -347,3 +347,74 @@ none of the cons. So, to start, here's a checklist of properties we want:
 
 * Predictability. It must be easy manipulate effects in a predictable manner,
   without fearing that ``runReaderT`` will affect anything but ``MonadReader``.
+
+Proposed Solutions
+------------------
+
+The ReaderT Pattern
+~~~~~~~~~~~~~~~~~~~
+
+Read the full article: https://www.fpcomplete.com/blog/2017/06/readert-design-pattern
+
+The general sentiment of the article is to have a single `Env` data type
+(basically, what we have with our modes), and use `ReaderT Env IO` exclusively.
+
+The general sentiment is true: `StateT`, `WriterT`, and `ExceptT` are almost
+never what you actually want. `StateT` kills the story for concurrency and makes
+it harder to deal with exceptions, `WriterT` is simply broken performance-wise
+(and its CPS-ed version is `StateT` with the same caveats), and `ExceptT` adds
+one more way to throw exceptions (so you need one more way to catch them).
+
+For pure code (without `IO` or `MonadIO`), use `StateT`, `WriterT`, and
+`ExceptT`. In other cases, avoid them.
+
+This aspect of the `ReaderT` pattern makes a lot of sense. Monad transformers
+are used to model effects in pure code, and in `IO` you don't have a choice but
+to have the actual effects themselves (there's mutable state, there are
+exceptions). Mixing them is unhelpful.
+
+Now, let's consider the global `Env` type. The issue with it is associated
+boilerplate of `Has` classes. In case we want to extend the environment to
+introduce local effects, there's a high cost in boilerplate. This can be already
+observed in our codebase.
+
+Point-by-point rundown:
+
+* Flexibility: LOW. Extension of environment requires declaring a new type,
+  writing `Has` instances for it, and potentially monad instances (although the
+  approach recommends avoiding monad classes in favor of `Has` classes, not
+  everything is under our control and there are classes by external libraries).
+  There's no way to partially run effects -- one needs to supply the entire
+  `ReaderT` environment up front.
+
+* Extensibility: MODERATE. Defining new effects boils down to declaring a method
+  record and a `Has` class for it. Then, for each field in the method record we
+  must define a function that extracts this method using the `Has` class and
+  runs it. Boilerplate-heavy, yes, but at least effects don't need to know about
+  each other.
+
+* Ease of use: MODERATE. Beginners can quickly grasp the basic concepts, but
+  there are pitfalls when it comes to lifting method records (see section on
+  `SendActions`).
+
+* Compile-time performance: SUPERB. There's nothing to it, GHC can easily handle
+  this style of code.
+
+* Run-time performance: MODERATE. A flat `ReaderT` layer is good, but method
+  records are stored within the context (rather than passed via instance
+  search). Because of this, the compiler can't assume that the method record is
+  coherent (it's not, you can modify it with `local`), and it limits inlining.
+  Instance specialization can't be performed because there are no instances to
+  speak of.
+
+* Run-time configurability: SUPERB. You can put just about anything into these
+  manually defined method records, modify them at will, etc. However, we need to
+  figure out a good story for method records that depend on other method
+  records, because it's the same pitfall as with `SendActions`: how can we
+  ensure that if we change the something (say, a logging method) with `local`,
+  other method records that use logging will be updated accordingly?
+
+* Predictability: LOW/HIGH. Depends on whether we have a `newtype` over
+  `ReaderT`.
+
+Verdict: the approach is viable but has its costs.
