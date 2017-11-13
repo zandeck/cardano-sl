@@ -199,13 +199,6 @@ of our custom classes yet. Just to clarify: in this section we'll discuss the
 current transitional state, and it's more painful than what was actually
 proposed by FPComplete.
 
-[Side note] To pass constant configuration to application components, instead of
-``ReaderT`` we use ``reflection``. More specifically, we use the dumb and unsafe
-``Given``-style reflection, avoiding the type-level complications of proper
-``Reifies``-style reflection. It turned out to be a great design choice: we've
-cut the potential amount of custom classes greatly, and the configs are
-available even in class instances (such as ``Bi``).
-
 Now our code follows this pattern::
 
     -- effect definitions
@@ -269,6 +262,60 @@ Conclusion:
 
 * Current solution requires huge swaths of boilerplate code, it's hard to
   reason about the code, and it's inflexible. We must seek other options.
+
+Addendum: reflection
+~~~~~~~~~~~~~~~~~~~~
+
+To pass constant configuration to application components, instead of
+``ReaderT`` we use ``reflection``. More specifically, we use the dumb and unsafe
+``Given``-style reflection, avoiding the type-level complications of proper
+``Reifies``-style reflection. It turned out to be a great design choice: we've
+cut the potential amount of custom classes greatly, and the configs are
+available even in class instances (such as ``Bi``).
+
+Addendum: SendActions
+~~~~~~~~~~~~~~~~~~~~~
+
+`SendActions` is another effect which is implemented differently from everything
+else in our system. It's an explicitly passed method dictionary that has the
+monad `m` as a type parameter. Unlike classes, explicit dictionaries must be passed
+manually (not by compiler via instance search), which might be both an advantage
+and a disadvantage.
+
+`SendActions` is a perfect example of a *local* effect: in general, we don't
+have the ability to send requests, but we get this ability when we start a so
+called conversation. Doing a local effect via an explicit dictionary is a
+testament to poor support for local effects of our current approach with modes.
+
+One of the problems with `SendActions` is its use of natural transformations. We
+have a helper `hoistSendActions`, and right now we horribly misuse it. Since
+``m`` in ``SendActions m`` is in an invariant position, we need
+`hoistSendActions` to convert ``SendActions n`` to ``SendActions m``, and it
+requires two natural transformations: ``n ~> m`` and ``m ~> n``. First,
+providing these transformations is an inconvenience (first one tends to be a
+mere lift, but the second one must do certain tricks to unlift). Second, it
+introduces a potential for horrible, subtle bugs. As I said, right now we misuse
+this helper, and I say that because we call it in a runner, `runRealMode`;
+therefore, the unlift natural transformation must reconstruct the monadic
+context from what it has at transformer stack initialization site, not at
+conversation fork site; therefore, any local modifications to the monad
+transformer stack are *not* reflected in forked conversations (such as `ReaderT`
+local).
+
+To put it into concrete terms, here is a code demonstration::
+
+    x <- ask
+    local f $ enqueueMsg msg $ \_ _ -> (:|[]) $ do
+      y <- ask
+
+What do you think, is `y` equal to `x` or `f x`? The way we currently use
+`hoistSendActions`, it will be equal to `x` (completely oblivious to `f`). This
+might be not at all what a programmer would expect.
+
+The moral of this story is that, perhaps, explicit dictionaries are a bad design
+because it's very easy to misuse them. A good effect system should take care of
+things like this. (But perhaps I'm overegenralizing and it's only bad to unlift,
+whereas lifting is straightforward).
 
 Future Plans
 ------------
