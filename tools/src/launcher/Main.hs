@@ -12,8 +12,9 @@ import           Universum
 
 import           Control.Concurrent           (modifyMVar_)
 import           Control.Concurrent.Async     (Async, async, cancel, poll, wait, waitAny,
-                                               withAsyncWithUnmask)
+                                               withAsyncWithUnmask, withAsync)
 import           Data.List                    (isSuffixOf)
+import           Data.Maybe                   (fromJust)
 import qualified Data.Text.IO                 as T
 import qualified Data.Text.Lazy.IO            as TL
 import           Data.Time.Units              (Second, convertUnit)
@@ -24,14 +25,15 @@ import           Options.Applicative          (Mod, OptionFields, Parser, auto,
                                                execParser, footerDoc, fullDesc, header,
                                                help, helper, info, infoOption, long,
                                                metavar, option, progDesc, short,
-                                               strOption)
+                                               switch, strOption)
 import           System.Directory             (createDirectoryIfMissing, doesFileExist,
                                                getTemporaryDirectory, removeFile)
 import           System.Environment           (getExecutablePath)
 import           System.Exit                  (ExitCode (..))
 import           System.FilePath              (normalise, (</>))
 import qualified System.IO                    as IO
-import           System.Process               (ProcessHandle, readProcessWithExitCode)
+import           System.Process               (ProcessHandle, runInteractiveProcess,
+                                              readProcessWithExitCode, waitForProcess)
 import qualified System.Process               as Process
 import           System.Timeout               (timeout)
 import           System.Wlog                  (lcFilePrefix, usingLoggerName)
@@ -61,6 +63,7 @@ data LauncherOptions = LO
     , loNodeLogPath         :: !(Maybe FilePath)
     , loWalletPath          :: !(Maybe FilePath)
     , loWalletArgs          :: ![Text]
+    , loWalletLogging       :: !Bool
     , loUpdaterPath         :: !FilePath
     , loUpdaterArgs         :: ![Text]
     , loUpdateArchive       :: !(Maybe FilePath)
@@ -103,6 +106,9 @@ optionsParser = do
         short   'w' <>
         help    "An argument to be passed to the wallet." <>
         metavar "ARG"
+    loWalletLogging <- switch $
+        long    "wlogging" <>
+        help    "Logging flag for the launcher wallet."
 
     -- Update-related args
     loUpdaterPath <- textOption $
@@ -212,6 +218,7 @@ main = do
                     , loUpdateArchive)
                     loNodeTimeoutSec
                     loReportServer
+                    loWalletLogging
   where
     -- We propagate configuration options to the node executable,
     -- because we almost certainly want to use the same configuration
@@ -281,11 +288,12 @@ clientScenario
     -- ^ Updater, args, updater runner, the update .tar
     -> Int                                 -- ^ Node timeout, in seconds
     -> Maybe String                        -- ^ Report server
+    -> Bool                                -- ^ Wallet logging
     -> IO ()
-clientScenario logConf node wallet updater nodeTimeout report = do
+clientScenario logConf node wallet updater nodeTimeout report walletLog = do
     runUpdater updater
     (nodeHandle, nodeAsync, nodeLog) <- spawnNode node
-    walletAsync <- async (runWallet wallet)
+    walletAsync <- async (runWallet walletLog wallet)
     (someAsync, exitCode) <- liftIO $ waitAny [nodeAsync, walletAsync]
     if | someAsync == nodeAsync -> do
              TL.putStrLn $ format ("The node has exited with "%shown) exitCode
@@ -302,10 +310,9 @@ clientScenario logConf node wallet updater nodeTimeout report = do
              liftIO $ do
                  Process.terminateProcess nodeHandle
                  cancel nodeAsync
-             clientScenario logConf node wallet updater nodeTimeout report
+             clientScenario logConf node wallet updater nodeTimeout report walletLog
        | otherwise -> do
              TL.putStrLn $ format ("The wallet has exited with "%shown) exitCode
-             -- TODO: does the wallet have some kind of log?
              putText "Killing the node"
              liftIO $ do
                  Process.terminateProcess nodeHandle
@@ -405,10 +412,16 @@ spawnNode (path, args, mbLogPath) = do
             putText "Node started"
             return (ph, asc, logPath)
 
-runWallet :: (FilePath, [Text]) -> IO ExitCode
-runWallet (path, args) = do
+runWallet :: Bool -> (FilePath, [Text]) -> IO ExitCode
+runWallet shouldLog (path, args) = do
     putText "Starting the wallet"
-    view _1 <$> readProcessWithExitCode path (map toString args) mempty
+    if shouldLog then do
+        (_, stdO, stdE, pid) <- runInteractiveProcess path (map toString args) Nothing Nothing
+        withAsync (forever $ IO.hGetLine stdO >>= IO.hPutStrLn stdout . ("[wallet] " <>)) $ \_ ->
+            withAsync (forever $ IO.hGetLine stdE >>= IO.hPutStrLn stderr . ("[wallet err] " <>)) $ \_ -> do
+            waitForProcess pid
+    else
+       view _1 <$> readProcessWithExitCode path (map toString args) mempty
 
 ----------------------------------------------------------------------------
 -- Working with the report server
@@ -452,10 +465,14 @@ system'
     -- ^ Exit code
 system' phvar p sl = liftIO (do
     let open = do
-            (m, _, _, ph) <- Process.createProcess p
+            (m, stdO, stdE, ph) <- Process.createProcess p
             putMVar phvar ph
             case m of
-                Just hIn -> IO.hSetBuffering hIn IO.LineBuffering
+                Just hIn -> do
+                    _ <- withAsync (forever $ IO.hGetLine (fromJust stdO) >>= IO.hPutStrLn stdout . ("[node] " <>)) $ \_ ->
+                         withAsync (forever $ IO.hGetLine (fromJust stdE) >>= IO.hPutStrLn stderr . ("[node err] " <>)) $ \_ -> do
+                         waitForProcess ph
+                    IO.hSetBuffering hIn IO.LineBuffering
                 _        -> return ()
             return (m, ph)
 
