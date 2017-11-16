@@ -40,9 +40,15 @@ library
                         Pos.DB.Block
                         Pos.DB.Block.Load
 
+                        -- Diffusion layer
+                        Pos.Diffusion.Types
+
                         -- GState
                         Pos.GState
                         Pos.GState.BlockExtra
+
+                        -- Logic layer
+                        Pos.Logic.Types
 
                         -- LRC
                         Pos.Lrc
