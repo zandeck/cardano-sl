@@ -9,6 +9,7 @@
 
 module Pos.Wallet.Web.Api
        ( WalletApi
+       , WalletApiNoPrefix
        , walletApi
 
        , ApiPrefix
@@ -68,34 +69,28 @@ module Pos.Wallet.Web.Api
        ) where
 
 
-import           Control.Lens               (from)
-import           Control.Monad.Catch        (try)
-import           Data.Reflection            (Reifies (..))
-import           Servant.API                ((:<|>), (:>), Capture, Delete, Get, JSON,
-                                             Post, Put, QueryParam, ReflectMethod (..),
-                                             ReqBody, Verb)
-import           Servant.Server             (HasServer (..))
-import           Servant.Swagger.UI         (SwaggerSchemaUI)
-import           Servant.API.ContentTypes   (OctetStream)
 import           Universum
 
-import           Pos.Types                  (Coin, SoftwareVersion)
-import           Pos.Util.Servant           (ApiLoggingConfig, CCapture, CQueryParam,
-                                             CReqBody, DCQueryParam,
-                                             HasLoggingServer (..), LoggingApi,
-                                             ModifiesApiRes (..), ReportDecodeError (..),
-                                             VerbMod, WithTruncatedLog (..),
-                                             applyLoggingToHandler, inRouteServer,
-                                             serverHandlerL')
-import           Pos.Wallet.Web.ClientTypes (Addr, CAccount, CAccountId, CAccountInit,
-                                             CAccountMeta, CAddress, CCoin, CFilePath, ClientInfo,
-                                             CId, CInitialized, CPaperVendWalletRedeem,
-                                             CPassPhrase, CProfile, CTx, CTxId, CTxMeta,
-                                             CUpdateInfo, CWallet, CWalletInit,
-                                             CWalletMeta, CWalletRedeem, ScrollLimit,
+import           Control.Lens (from)
+import           Control.Monad.Catch (try)
+import           Data.Reflection (Reifies (..))
+import           Servant.API ((:<|>), (:>), Capture, Delete, Get, JSON, Post, Put, QueryParam,
+                              ReqBody, Verb)
+import           Servant.API.ContentTypes (NoContent, OctetStream)
+import           Servant.Swagger.UI (SwaggerSchemaUI)
+
+import           Pos.Client.Txp.Util (InputSelectionPolicy)
+import           Pos.Core (Coin, SoftwareVersion)
+import           Pos.Util.Servant (ApiLoggingConfig, CCapture, CQueryParam, CReqBody, DCQueryParam,
+                                   DReqBody, LoggingApi, ModifiesApiRes (..),
+                                   ReportDecodeError (..), VerbMod, serverHandlerL')
+import           Pos.Wallet.Web.ClientTypes (Addr, CAccount, CAccountId, CAccountInit, CAccountMeta,
+                                             CAddress, CCoin, CFilePath, CId, CInitialized,
+                                             CPaperVendWalletRedeem, CPassPhrase, CProfile, CTx,
+                                             CTxId, CTxMeta, CUpdateInfo, CWallet, CWalletInit,
+                                             CWalletMeta, CWalletRedeem, ClientInfo, ScrollLimit,
                                              ScrollOffset, SyncProgress, Wal)
-import           Pos.Wallet.Web.Error       (WalletError (DecodeError),
-                                             catchEndpointErrors)
+import           Pos.Wallet.Web.Error (WalletError (DecodeError), catchEndpointErrors)
 import           Pos.Wallet.Web.Methods.Misc (WalletStateSnapshot)
 
 -- | Common prefix for all endpoints.
@@ -115,19 +110,6 @@ instance ModifiesApiRes WalletVerbTag where
 instance ReportDecodeError (WalletVerb (Verb (mt :: k1) (st :: Nat) (ct :: [*]) a)) where
     reportDecodeError _ err = throwM (DecodeError err) ^. from serverHandlerL'
 
-instance ( HasServer (Verb mt st ct $ ApiModifiedRes WalletVerbTag a) ctx
-         , Reifies config ApiLoggingConfig
-         , ReflectMethod mt
-         , Buildable (WithTruncatedLog a)
-         ) =>
-         HasLoggingServer config (WalletVerb (Verb (mt :: k1) (st :: Nat) (ct :: [*]) a)) ctx where
-    routeWithLog =
-        -- TODO [CSM-466] avoid manually rewriting rule for composite api modification
-        inRouteServer @(Verb mt st ct $ ApiModifiedRes WalletVerbTag a) route $
-        \(paramsInfo, handler) ->
-            handler & serverHandlerL' %~ modifyApiResult (Proxy @WalletVerbTag)
-                    & applyLoggingToHandler (Proxy @config) (Proxy @mt) . (paramsInfo, )
-
 -- | Specifes servant logging config.
 data WalletLoggingConfig
 
@@ -144,7 +126,7 @@ type WRes verbType a = WalletVerb (verbType '[JSON] a)
 type TestReset =
        "test"
     :> "reset"
-    :> WRes Post ()
+    :> WRes Post NoContent
 
 type TestState =
        "test"
@@ -187,7 +169,7 @@ type RestoreWallet =
 type DeleteWallet =
        "wallets"
     :> Capture "walletId" (CId Wal)
-    :> WRes Delete ()
+    :> WRes Delete NoContent
 
 type ImportWallet =
        "wallets"
@@ -202,7 +184,7 @@ type ChangeWalletPassphrase =
     :> Capture "walletId" (CId Wal)
     :> DCQueryParam "old" CPassPhrase
     :> DCQueryParam "new" CPassPhrase
-    :> WRes Post ()
+    :> WRes Post NoContent
 
 -------------------------------------------------------------------------
 -- Accounts
@@ -233,7 +215,7 @@ type NewAccount =
 type DeleteAccount =
        "accounts"
     :> CCapture "accountId" CAccountId
-    :> WRes Delete ()
+    :> WRes Delete NoContent
 
 -------------------------------------------------------------------------
 -- Wallet addresses
@@ -278,6 +260,7 @@ type NewPayment =
     :> CCapture "from" CAccountId
     :> Capture "to" (CId Addr)
     :> Capture "amount" Coin
+    :> DReqBody '[JSON] (Maybe InputSelectionPolicy)
     :> WRes Post CTx
 
 type TxFee =
@@ -286,7 +269,8 @@ type TxFee =
     :> CCapture "from" CAccountId
     :> Capture "to" (CId Addr)
     :> Capture "amount" Coin
-    :> WRes Get CCoin
+    :> DReqBody '[JSON] (Maybe InputSelectionPolicy)
+    :> WRes Post CCoin
 
 type UpdateTx =
        "txs"
@@ -294,7 +278,7 @@ type UpdateTx =
     :> CCapture "address" CAccountId
     :> Capture "transaction" CTxId
     :> ReqBody '[JSON] CTxMeta
-    :> WRes Post ()
+    :> WRes Post NoContent
 
 type GetHistory =
        "txs"
@@ -317,12 +301,12 @@ type NextUpdate =
 type PostponeUpdate =
        "update"
     :> "postpone"
-    :> WRes Post ()
+    :> WRes Post NoContent
 
 type ApplyUpdate =
        "update"
     :> "apply"
-    :> WRes Post ()
+    :> WRes Post NoContent
 
 -------------------------------------------------------------------------
 -- Redemptions
@@ -351,7 +335,7 @@ type ReportingInitialized =
        "reporting"
     :> "initialized"
     :> ReqBody '[JSON] CInitialized
-    :> WRes Post ()
+    :> WRes Post NoContent
 
 -------------------------------------------------------------------------
 -- Settings
@@ -395,7 +379,7 @@ type ExportBackupJSON =
     :> "export"
     :> Capture "walletId" (CId Wal)
     :> ReqBody '[JSON] CFilePath
-    :> WRes Post ()
+    :> WRes Post NoContent
 
 -------------------------------------------------------------------------
 -- Settings
@@ -406,7 +390,9 @@ type GetClientInfo =
     :> WRes Get ClientInfo
 
 -- | Servant API which provides access to wallet.
-type WalletApi = ApiPrefix :> (
+type WalletApi = ApiPrefix :> WalletApiNoPrefix
+
+type WalletApiNoPrefix = (
      -- NOTE: enabled in prod mode https://issues.serokell.io/issue/CSM-333
      TestReset
     :<|>

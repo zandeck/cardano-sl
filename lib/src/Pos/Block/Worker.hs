@@ -9,64 +9,55 @@ module Pos.Block.Worker
 
 import           Universum
 
-import           Control.Lens                (ix)
-import qualified Data.List.NonEmpty          as NE
-import           Data.Time.Units             (Microsecond)
-import           Formatting                  (Format, bprint, build, fixed, int, now,
-                                              sformat, shown, (%))
-import           Mockable                    (delay, fork)
-import           Serokell.Util               (listJson, pairF, sec)
-import qualified System.Metrics.Label        as Label
-import           System.Wlog                 (logDebug, logInfo, logWarning)
+import           Control.Lens (ix)
+import qualified Data.List.NonEmpty as NE
+import           Data.Time.Units (Microsecond)
+import           Formatting (Format, bprint, build, fixed, int, now, sformat, shown, (%))
+import           Mockable (delay, fork)
+import           Serokell.Util (listJson, pairF, sec)
+import qualified System.Metrics.Label as Label
+import           System.Wlog (logDebug, logInfo, logWarning)
 
-import           Pos.Binary.Communication    ()
-import           Pos.Block.Logic             (calcChainQualityFixedTime,
-                                              calcChainQualityM, calcOverallChainQuality,
-                                              createGenesisBlockAndApply,
-                                              createMainBlockAndApply)
-import           Pos.Block.Network.Announce  (announceBlock, announceBlockOuts)
+import           Pos.Binary.Communication ()
+import           Pos.Block.Logic (calcChainQualityFixedTime, calcChainQualityM,
+                                  calcOverallChainQuality, createGenesisBlockAndApply,
+                                  createMainBlockAndApply)
+import           Pos.Block.Network.Announce (announceBlock, announceBlockOuts)
 import           Pos.Block.Network.Retrieval (retrievalWorker)
-import           Pos.Block.Slog              (scCQFixedMonitorState,
-                                              scCQOverallMonitorState, scCQkMonitorState,
-                                              scCrucialValuesLabel,
-                                              scDifficultyMonitorState,
-                                              scEpochMonitorState,
-                                              scGlobalSlotMonitorState,
-                                              scLocalSlotMonitorState, slogGetLastSlots)
-import           Pos.Communication.Protocol  (OutSpecs, SendActions (..), Worker,
-                                              WorkerSpec, onNewSlotWorker)
-import           Pos.Configuration           (networkDiameter)
-import           Pos.Context                 (getOurPublicKey, recoveryCommGuard)
-import           Pos.Core                    (BlockVersionData (..), ChainDifficulty,
-                                              FlatSlotId, SlotId (..),
-                                              Timestamp (Timestamp), blkSecurityParam,
-                                              difficultyL, epochSlots, fixedTimeCQSec,
-                                              flattenSlotId, gbHeader, getSlotIndex,
-                                              slotIdF, unflattenSlotId)
-import           Pos.Core.Address            (addressHash)
-import           Pos.Core.Configuration      (HasConfiguration, criticalCQ,
-                                              criticalCQBootstrap, nonCriticalCQ,
-                                              nonCriticalCQBootstrap)
-import           Pos.Crypto                  (ProxySecretKey (pskDelegatePk, pskIssuerPk, pskOmega))
-import           Pos.DB                      (gsIsBootstrapEra)
-import qualified Pos.DB.DB                   as DB
-import           Pos.DB.Misc                 (getProxySecretKeysLight)
-import           Pos.Delegation.Helpers      (isRevokePsk)
-import           Pos.Delegation.Logic        (getDlgTransPsk)
-import           Pos.Delegation.Types        (ProxySKBlockInfo)
-import           Pos.GState                  (getAdoptedBVData, getPskByIssuer)
-import           Pos.Lrc.DB                  (getLeaders)
-import           Pos.Reporting               (MetricMonitor (..), MetricMonitorState,
-                                              noReportMonitor, recordValue, reportOrLogE)
-import           Pos.Slotting                (currentTimeSlotting,
-                                              getSlotStartEmpatically)
-import           Pos.Util                    (logWarningSWaitLinear, mconcatPair)
-import           Pos.Util.Chrono             (OldestFirst (..))
-import           Pos.Util.JsonLog            (jlCreatedBlock)
-import           Pos.Util.LogSafe            (logDebugS, logInfoS, logWarningS)
-import           Pos.Util.TimeWarp           (CanJsonLog (..))
-import           Pos.Util.Timer              (Timer)
-import           Pos.WorkMode.Class          (WorkMode)
+import           Pos.Block.Slog (scCQFixedMonitorState, scCQOverallMonitorState, scCQkMonitorState,
+                                 scCrucialValuesLabel, scDifficultyMonitorState,
+                                 scEpochMonitorState, scGlobalSlotMonitorState,
+                                 scLocalSlotMonitorState, slogGetLastSlots)
+import           Pos.Communication.Protocol (OutSpecs, SendActions (..), Worker, WorkerSpec,
+                                             onNewSlotWorker)
+import           Pos.Configuration (networkDiameter)
+import           Pos.Context (getOurPublicKey, recoveryCommGuard)
+import           Pos.Core (BlockVersionData (..), ChainDifficulty, FlatSlotId, SlotId (..),
+                           Timestamp (Timestamp), blkSecurityParam, difficultyL, epochSlots,
+                           fixedTimeCQSec, flattenSlotId, gbHeader, getSlotIndex, slotIdF,
+                           unflattenSlotId)
+import           Pos.Core.Address (addressHash)
+import           Pos.Core.Configuration (HasConfiguration, criticalCQ, criticalCQBootstrap,
+                                         nonCriticalCQ, nonCriticalCQBootstrap)
+import           Pos.Crypto (ProxySecretKey (pskDelegatePk))
+import           Pos.DB (gsIsBootstrapEra)
+import qualified Pos.DB.BlockIndex as DB
+import           Pos.Delegation.Logic (getDlgTransPsk)
+import           Pos.Delegation.Types (ProxySKBlockInfo)
+import           Pos.GState (getAdoptedBVData, getPskByIssuer)
+import qualified Pos.Lrc.DB as LrcDB (getLeadersForEpoch)
+import           Pos.Reporting (MetricMonitor (..), MetricMonitorState, noReportMonitor,
+                                recordValue, reportOrLogE)
+import           Pos.Slotting (currentTimeSlotting, getSlotStartEmpatically)
+import           Pos.Util (mconcatPair)
+import           Pos.Util.Chrono (OldestFirst (..))
+import           Pos.Util.JsonLog (jlCreatedBlock)
+import           Pos.Util.LogSafe (logDebugS, logInfoS, logWarningS)
+import           Pos.Util.TimeLimit (logWarningSWaitLinear)
+import           Pos.Util.Timer (Timer)
+import           Pos.Util.TimeWarp (CanJsonLog (..))
+import           Pos.WorkMode.Class (WorkMode)
+
 
 ----------------------------------------------------------------------------
 -- All workers
@@ -117,7 +108,7 @@ blockCreator (slotId@SlotId {..}) sendActions = do
         jsonLog $ jlCreatedBlock (Left createdBlk)
 
     -- Then we get leaders for current epoch.
-    leadersMaybe <- getLeaders siEpoch
+    leadersMaybe <- LrcDB.getLeadersForEpoch siEpoch
     case leadersMaybe of
         -- If we don't know leaders, we can't do anything.
         Nothing -> logWarning "Leaders are not known for new slot"
@@ -151,23 +142,6 @@ blockCreator (slotId@SlotId {..}) sendActions = do
             else logDebug $ sformat ("Trimmed leaders: "%listJson) $
                             dropAround (fromIntegral $ fromEnum $ siSlot) 10 strLeaders
 
-        proxyCerts <- getProxySecretKeysLight
-        let validCerts =
-                filter (\pSk -> let (w0,w1) = pskOmega pSk
-                                in and [ siEpoch >= w0
-                                       , siEpoch <= w1
-                                       , not $ isRevokePsk pSk
-                                       ])
-                       proxyCerts
-            -- cert we can use to _issue_ instead of real slot leader
-        let validLightCert = find (\psk -> addressHash (pskIssuerPk psk) == leader &&
-                                           pskDelegatePk psk == ourPk)
-                             validCerts
-        let ourLightPsk = find (\psk -> pskIssuerPk psk == ourPk) validCerts
-        let lightWeDelegated = isJust ourLightPsk
-        let lightWeAreDelegate = isJust validLightCert
-        logDebugS $ sformat ("Available to use lightweight PSKs: "%listJson) validCerts
-
         ourHeavyPsk <- getPskByIssuer (Left ourPk)
         let heavyWeAreIssuer = isJust ourHeavyPsk
         dlgTransM <- getDlgTransPsk leader
@@ -181,18 +155,11 @@ blockCreator (slotId@SlotId {..}) sendActions = do
                  ("Not creating the block (though we're leader) because it's "%
                   "delegated by heavy psk: "%build)
                  ourHeavyPsk
-           | weAreLeader && lightWeDelegated ->
-                 logInfoS $ sformat
-                 ("Not creating the block (though we're leader) because it's "%
-                  "delegated by light psk: "%build)
-                 ourLightPsk
            | weAreLeader ->
                  onNewSlotWhenLeader slotId Nothing sendActions
            | heavyWeAreDelegate ->
-                 let pske = Right . swap <$> dlgTransM
+                 let pske = swap <$> dlgTransM
                  in onNewSlotWhenLeader slotId pske sendActions
-           | lightWeAreDelegate ->
-                 onNewSlotWhenLeader slotId  (Left <$> validLightCert) sendActions
            | otherwise -> pass
 
 onNewSlotWhenLeader
@@ -205,9 +172,7 @@ onNewSlotWhenLeader slotId pske SendActions {..} = do
             sformat ("I have a right to create a block for the slot "%slotIdF%" ")
                     slotId
         logLeader = "because i'm a leader"
-        logCert (Left psk) =
-            sformat ("using ligtweight proxy signature key "%build%", will do it soon") psk
-        logCert (Right (psk,_)) =
+        logCert (psk,_) =
             sformat ("using heavyweight proxy signature key "%build%", will do it soon") psk
     logInfoS $ logReason <> maybe logLeader logCert pske
     nextSlotStart <- getSlotStartEmpatically (succ slotId)

@@ -16,31 +16,27 @@ module Pos.Block.Logic.Util
 
 import           Universum
 
-import           Control.Lens           (_Wrapped)
-import           Data.List              (findIndex)
-import           Data.List.NonEmpty     ((<|))
-import qualified Data.List.NonEmpty     as NE
-import           Formatting             (int, sformat, (%))
-import           System.Wlog            (WithLogger)
+import           Control.Lens (_Wrapped)
+import           Data.List (findIndex)
+import           Data.List.NonEmpty ((<|))
+import qualified Data.List.NonEmpty as NE
+import           Formatting (int, sformat, (%))
+import           System.Wlog (WithLogger)
 
-import           Pos.Block.Core         (BlockHeader)
 import           Pos.Block.Slog.Context (slogGetLastSlots)
-import           Pos.Block.Slog.Types   (HasSlogGState)
-import           Pos.Core               (BlockCount, FlatSlotId, HeaderHash,
-                                         Timestamp (..), diffEpochOrSlot, difficultyL,
-                                         fixedTimeCQ, flattenSlotId, getEpochOrSlot,
-                                         headerHash, prevBlockL)
-import           Pos.Core.Configuration (HasConfiguration, blkSecurityParam,
-                                         slotSecurityParam)
-import           Pos.DB                 (MonadDBRead)
-import           Pos.DB.Block           (MonadBlockDB)
-import qualified Pos.DB.DB              as DB
-import           Pos.Exception          (reportFatalError)
-import qualified Pos.GState             as GS
-import           Pos.Slotting           (MonadSlots (..), getCurrentSlotFlat,
-                                         slotFromTimestamp)
-import           Pos.Util               (_neHead)
-import           Pos.Util.Chrono        (NE, OldestFirst (..))
+import           Pos.Block.Slog.Types (HasSlogGState)
+import           Pos.Core (BlockCount, FlatSlotId, HeaderHash, Timestamp (..), diffEpochOrSlot,
+                           difficultyL, fixedTimeCQ, flattenSlotId, getEpochOrSlot, headerHash,
+                           prevBlockL)
+import           Pos.Core.Block (BlockHeader)
+import           Pos.Core.Configuration (HasConfiguration, blkSecurityParam, slotSecurityParam)
+import qualified Pos.DB.BlockIndex as DB
+import           Pos.DB.Class (MonadBlockDBRead)
+import           Pos.Exception (reportFatalError)
+import qualified Pos.GState as GS
+import           Pos.Slotting (MonadSlots (..), getCurrentSlotFlat, slotFromTimestamp)
+import           Pos.Util (_neHead)
+import           Pos.Util.Chrono (NE, OldestFirst (..))
 
 --- Usually in this method oldest header is LCA, so it can be optimized
 -- by traversing from older to newer.
@@ -48,7 +44,7 @@ import           Pos.Util.Chrono        (NE, OldestFirst (..))
 -- header's parent hash. Iterates from newest to oldest until meets
 -- first header that's in main chain. O(n).
 lcaWithMainChain
-    :: (HasConfiguration, MonadDBRead m)
+    :: (HasConfiguration, MonadBlockDBRead m)
     => OldestFirst NE BlockHeader -> m (Maybe HeaderHash)
 lcaWithMainChain headers =
     lcaProceed Nothing $
@@ -80,7 +76,7 @@ needRecovery
     :: forall ctx m.
     ( HasConfiguration
     , MonadSlots ctx m
-    , MonadBlockDB m
+    , MonadBlockDBRead m
     )
     => m Bool
 needRecovery = maybe (pure True) isTooOld =<< getCurrentSlot
@@ -143,7 +139,7 @@ calcChainQualityM newSlot = do
 -- slot is unknown.
 calcOverallChainQuality ::
        forall ctx m res.
-       (Fractional res, MonadSlots ctx m, MonadBlockDB m, HasConfiguration)
+       (Fractional res, MonadSlots ctx m, MonadBlockDBRead m, HasConfiguration)
     => m (Maybe res)
 calcOverallChainQuality =
     getCurrentSlotFlat >>= \case

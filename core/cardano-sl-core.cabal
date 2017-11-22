@@ -19,19 +19,31 @@ library
   exposed-modules:
                        Pos.Arbitrary.Core
                        Pos.Arbitrary.Core.Unsafe
-                       Pos.Arbitrary.Crypto
-                       Pos.Arbitrary.Crypto.Unsafe
 
                        Pos.Aeson.Core
                        Pos.Aeson.Core.Configuration
-                       Pos.Aeson.Crypto
                        Pos.Aeson.Fee
                        Pos.Aeson.Genesis
 
-
                        Pos.Core
                        Pos.Core.Address
+
                        Pos.Core.Block
+                       Pos.Core.Block.Blockchain
+                       Pos.Core.Block.Genesis
+                       Pos.Core.Block.Genesis.Chain
+                       Pos.Core.Block.Genesis.Lens
+                       Pos.Core.Block.Genesis.Instances
+                       Pos.Core.Block.Genesis.Types
+                       Pos.Core.Block.Main
+                       Pos.Core.Block.Main.Chain
+                       Pos.Core.Block.Main.Lens
+                       Pos.Core.Block.Main.Instances
+                       Pos.Core.Block.Main.Types
+                       Pos.Core.Block.Union
+                       Pos.Core.Block.Union.Instances
+                       Pos.Core.Block.Union.Types
+
                        Pos.Core.BlockVersionData
                        Pos.Core.Class
                        Pos.Core.Configuration
@@ -44,11 +56,15 @@ library
                        Pos.Core.Constants
                        Pos.Core.Coin
                        Pos.Core.Context
+                       Pos.Core.Delegation
                        Pos.Core.Fee
+                       Pos.Core.Update
                        Pos.Core.Script
                        Pos.Core.SharedSeed
                        Pos.Core.Slotting
+                       Pos.Core.Ssc
                        Pos.Core.Timestamp
+                       Pos.Core.Txp
                        Pos.Core.Types
                        Pos.Core.Version
                        Pos.Core.Vss
@@ -60,63 +76,30 @@ library
                        Pos.Core.Genesis.Helpers
                        Pos.Core.Genesis.Types
 
-                       Pos.Crypto
-                       Pos.Crypto.Encryption
-                       Pos.Crypto.AsBinary
-                       Pos.Crypto.HD
-                       Pos.Crypto.Random
-                       Pos.Crypto.Hashing
-                       Pos.Crypto.Signing
-                       Pos.Crypto.Signing.Tag
-                       Pos.Crypto.Signing.Redeem
-                       Pos.Crypto.Signing.Safe
-                       Pos.Crypto.Signing.Signing
-                       Pos.Crypto.Signing.Types
-                       Pos.Crypto.Signing.Types.Tag
-                       Pos.Crypto.Signing.Types.Redeem
-                       Pos.Crypto.Signing.Types.Safe
-                       Pos.Crypto.Signing.Types.Signing
-                       Pos.Crypto.Scrypt
-                       Pos.Crypto.SecretSharing
-
                        Pos.Merkle
                        Pos.Data.Attributes
                        Pos.Exception
 
-                       Pos.Binary.Class
-                       Pos.Binary.Class.Core
-                       Pos.Binary.Class.Numbers
-                       Pos.Binary.Class.Primitive
-                       Pos.Binary.Class.TH
-                       Pos.Binary.Crypto
-                       Pos.Binary.Merkle
                        Pos.Binary.Core
                        Pos.Binary.Core.Address
                        Pos.Binary.Core.Block
+                       Pos.Binary.Core.Blockchain
                        Pos.Binary.Core.Coin
+                       Pos.Binary.Core.Delegation
                        Pos.Binary.Core.Fee
                        Pos.Binary.Core.Script
+                       Pos.Binary.Core.Ssc
+                       Pos.Binary.Core.Txp
                        Pos.Binary.Core.Types
+                       Pos.Binary.Core.Update
                        Pos.Binary.Core.Version
+                       Pos.Binary.Merkle
 
                        Pos.System.Metrics.Constants
 
-                       Pos.Util.Arbitrary
-                       Pos.Util.CompileInfo
-                       Pos.Util.Concurrent
-                       Pos.Util.Concurrent.LockedTVar
-                       Pos.Util.Concurrent.PriorityLock
-                       Pos.Util.Concurrent.RWLock
-                       Pos.Util.Concurrent.RWVar
+                       Pos.Util.AssertMode
                        Pos.Util.Chrono
-                       Pos.Util.Justify
                        Pos.Util.Limits
-                       Pos.Util.LRU
-                       Pos.Util.Mnemonics
-                       Pos.Util.Modifier
-                       Pos.Util.Future
-                       Pos.Util.Queue
-                       Pos.Util.Util
 
   other-modules:
                        Pos.Core.Context.PrimaryKey
@@ -126,17 +109,15 @@ library
                      , ansi-terminal
                      , autoexporter
                      , base
-                     , base16-bytestring
                      , base58-bytestring
                      , binary
                      , bytestring
                      , canonical-json
-                     , cardano-crypto
+                     , cardano-sl-binary
+                     , cardano-sl-crypto
+                     , cardano-sl-util
                      , cborg
-                     , cereal
-                     , concurrent-extra
                      , containers
-                     , contravariant
                      , cryptonite
                      , cryptonite-openssl >= 0.5
                      , data-default
@@ -144,11 +125,8 @@ library
                      , deriving-compat
                      , digest
                      , directory
-                     , ed25519
-                     , ether >= 0.5
                      , exceptions
                      , extra
-                     , file-embed
                      , filepath
                      , fmt
                      , formatting
@@ -156,39 +134,26 @@ library
                      , hashable
                      , lens
                      , log-warper >= 1.0.3
-                     , lrucache
                      , memory
-                     , mmorph
                      , mtl
                      , node-sketch
                      , parsec
                      , plutus-prototype
-                     , process
-                     , pvss
                      , quickcheck-instances
                      , random
                      , reflection
-                     , resourcet
-                     , safecopy
                      , scrypt >= 0.5
-                     , semigroups
                      , serokell-util
-                     , stm
                      , tagged
                      , template-haskell
                      , text
                      , text-format
                      , th-lift-instances
-                     , th-utilities
                      , time
                      , time-units
-                     , transformers
-                     , transformers-base
-                     , transformers-lift
                      , universum
                      , unordered-containers
                      , vector
-                     , yaml
 
   default-language:    Haskell2010
 

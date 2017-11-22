@@ -4,33 +4,29 @@ module Pos.Security.Workers
 
 import           Universum
 
-import           Data.Time.Units            (Millisecond, convertUnit)
-import           Formatting                 (build, sformat, (%))
-import           Mockable                   (delay)
-import           Serokell.Util              (sec)
-import           System.Wlog                (logWarning)
+import           Data.Time.Units (Millisecond, convertUnit)
+import           Formatting (build, sformat, (%))
+import           Mockable (delay)
+import           Serokell.Util (sec)
+import           System.Wlog (logWarning)
 
-import           Pos.Binary.Ssc             ()
-import           Pos.Block.Core             (BlockHeader)
-import           Pos.Block.Logic            (needRecovery)
-import           Pos.Block.Network          (requestTipOuts, triggerRecovery)
-import           Pos.Communication.Protocol (OutSpecs, SendActions (..), WorkerSpec,
-                                             worker)
-import           Pos.Configuration          (HasNodeConfiguration,
-                                             mdNoBlocksSlotThreshold)
-import           Pos.Context                (getOurPublicKey, getUptime,
-                                             recoveryCommGuard)
-import           Pos.Core                   (SlotId (..), flattenEpochOrSlot,
-                                             flattenSlotId, headerHash, headerLeaderKeyL,
-                                             prevBlockL)
-import           Pos.Core.Configuration     (HasConfiguration, genesisHash)
-import           Pos.Crypto                 (PublicKey)
-import           Pos.DB                     (DBError (DBMalformed))
-import           Pos.DB.Block               (MonadBlockDB, blkGetHeader)
-import           Pos.DB.DB                  (getTipHeader)
-import           Pos.Reporting              (reportMisbehaviour, reportOrLogE)
-import           Pos.Slotting               (getCurrentSlot, getNextEpochSlotDuration)
-import           Pos.WorkMode.Class         (WorkMode)
+import           Pos.Binary.Ssc ()
+import           Pos.Block.Logic (needRecovery)
+import           Pos.Block.Network (requestTipOuts, triggerRecovery)
+import           Pos.Communication.Protocol (OutSpecs, SendActions (..), WorkerSpec, worker)
+import           Pos.Configuration (HasNodeConfiguration, mdNoBlocksSlotThreshold)
+import           Pos.Context (getOurPublicKey, getUptime, recoveryCommGuard)
+import           Pos.Core (SlotId (..), flattenEpochOrSlot, flattenSlotId, headerHash,
+                           headerLeaderKeyL, prevBlockL)
+import           Pos.Core.Block (BlockHeader)
+import           Pos.Core.Configuration (HasConfiguration, genesisHash)
+import           Pos.Crypto (PublicKey)
+import           Pos.DB (DBError (DBMalformed))
+import qualified Pos.DB.BlockIndex as DB
+import           Pos.DB.Class (MonadDBRead)
+import           Pos.Reporting (reportMisbehaviour, reportOrLogE)
+import           Pos.Slotting (getCurrentSlot, getNextEpochSlotDuration)
+import           Pos.WorkMode.Class (WorkMode)
 
 -- | Workers which perform security checks.
 securityWorkers :: WorkMode ctx m => ([WorkerSpec m], OutSpecs)
@@ -45,7 +41,7 @@ checkForReceivedBlocksWorker =
     worker requestTipOuts checkForReceivedBlocksWorkerImpl
 
 checkEclipsed
-    :: (MonadBlockDB m, HasConfiguration, HasNodeConfiguration)
+    :: (MonadDBRead m, HasConfiguration, HasNodeConfiguration)
     => PublicKey -> SlotId -> BlockHeader -> m Bool
 checkEclipsed ourPk slotId x = notEclipsed x
   where
@@ -76,7 +72,7 @@ checkEclipsed ourPk slotId x = notEclipsed x
            | prevBlock == genesisHash -> pure True
            | isGoodBlock header       -> pure True
            | otherwise                ->
-                 blkGetHeader prevBlock >>= \case
+                 DB.getHeader prevBlock >>= \case
                      Just h  -> notEclipsed h
                      Nothing -> onBlockLoadFailure header $> True
 
@@ -92,7 +88,7 @@ checkForReceivedBlocksWorkerImpl SendActions {..} = afterDelay $ do
     repeatOnInterval (min (sec' 20)) . recoveryCommGuard "security worker" $ do
         ourPk <- getOurPublicKey
         let onSlotDefault slotId = do
-                header <- getTipHeader
+                header <- DB.getTipHeader
                 unlessM (checkEclipsed ourPk slotId header) onEclipsed
         whenJustM getCurrentSlot onSlotDefault
   where

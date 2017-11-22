@@ -10,41 +10,37 @@ module Pos.Wallet.Web.Methods.Payment
 
 import           Universum
 
-import           Control.Exception              (throw)
-import           Control.Monad.Except           (runExcept)
+import           Control.Exception (throw)
+import           Control.Monad.Except (runExcept)
 
-import           Pos.Client.KeyStorage          (getSecretKeys)
-import           Pos.Client.Txp.Addresses       (MonadAddresses)
-import           Pos.Client.Txp.Balances        (MonadBalances (..))
-import           Pos.Client.Txp.History         (TxHistoryEntry (..))
-import           Pos.Client.Txp.Util            (computeTxFee, runTxCreator)
-import           Pos.Communication              (prepareMTx)
-import           Pos.Core                       (Coin, getCurrentTimestamp)
-import           Pos.Crypto                     (PassPhrase, ShouldCheckPassphrase (..),
-                                                 checkPassMatches, hash,
-                                                 withSafeSignerUnsafe)
-import           Pos.DB                         (MonadGState)
-import           Pos.Txp                        (TxFee (..), Utxo, _txOutputs)
-import           Pos.Txp.Core                   (TxAux (..), TxOut (..))
-import           Pos.Util                       (eitherToThrow, maybeThrow)
-import           Pos.Util.Servant               (encodeCType)
-import           Pos.Wallet.Aeson.ClientTypes   ()
-import           Pos.Wallet.Aeson.WalletBackup  ()
-import           Pos.Wallet.Web.Account         (getSKByAddressPure, getSKById)
-import           Pos.Wallet.Web.ClientTypes     (AccountId (..), Addr, CCoin, CId,
-                                                 CTx (..), CWAddressMeta (..), Wal,
-                                                 addrMetaToAccount)
-import           Pos.Wallet.Web.Error           (WalletError (..))
+import           Pos.Client.KeyStorage (getSecretKeys)
+import           Pos.Client.Txp.Addresses (MonadAddresses)
+import           Pos.Client.Txp.Balances (MonadBalances (..))
+import           Pos.Client.Txp.History (TxHistoryEntry (..))
+import           Pos.Client.Txp.Network (prepareMTx)
+import           Pos.Client.Txp.Util (InputSelectionPolicy, computeTxFee, runTxCreator)
+import           Pos.Core (Coin, TxAux (..), TxOut (..), getCurrentTimestamp)
+import           Pos.Core.Txp (_txOutputs)
+import           Pos.Crypto (PassPhrase, ShouldCheckPassphrase (..), checkPassMatches, hash,
+                             withSafeSignerUnsafe)
+import           Pos.DB (MonadGState)
+import           Pos.Txp (TxFee (..), Utxo)
+import           Pos.Util (eitherToThrow, maybeThrow)
+import           Pos.Util.Servant (encodeCType)
+import           Pos.Wallet.Aeson.ClientTypes ()
+import           Pos.Wallet.Aeson.WalletBackup ()
+import           Pos.Wallet.Web.Account (getSKByAddressPure, getSKById)
+import           Pos.Wallet.Web.ClientTypes (AccountId (..), Addr, CCoin, CId, CTx (..),
+                                             CWAddressMeta (..), Wal, addrMetaToAccount)
+import           Pos.Wallet.Web.Error (WalletError (..))
 import           Pos.Wallet.Web.Methods.History (addHistoryTxMeta, constructCTx,
                                                  getCurChainDifficulty)
-import           Pos.Wallet.Web.Methods.Txp     (MonadWalletTxFull, coinDistrToOutputs,
-                                                 rewrapTxError, submitAndSaveNewPtx)
-import           Pos.Wallet.Web.Pending         (mkPendingTx)
-import           Pos.Wallet.Web.State           (AddressLookupMode (Ever, Existing),
-                                                 MonadWalletDBRead)
-import           Pos.Wallet.Web.Util            (decodeCTypeOrFail,
-                                                 getAccountAddrsOrThrow,
-                                                 getWalletAccountIds, getWalletAddrsSet)
+import           Pos.Wallet.Web.Methods.Txp (MonadWalletTxFull, coinDistrToOutputs, rewrapTxError,
+                                             submitAndSaveNewPtx)
+import           Pos.Wallet.Web.Pending (mkPendingTx)
+import           Pos.Wallet.Web.State (AddressLookupMode (Ever, Existing), MonadWalletDBRead)
+import           Pos.Wallet.Web.Util (decodeCTypeOrFail, getAccountAddrsOrThrow,
+                                      getWalletAccountIds, getWalletAddrsSet)
 
 newPayment
     :: MonadWalletTxFull ctx m
@@ -52,12 +48,14 @@ newPayment
     -> AccountId
     -> CId Addr
     -> Coin
+    -> InputSelectionPolicy
     -> m CTx
-newPayment passphrase srcAccount dstAddress coin =
+newPayment passphrase srcAccount dstAddress coin policy =
     sendMoney
         passphrase
         (AccountMoneySource srcAccount)
         (one (dstAddress, coin))
+        policy
 
 type MonadFees ctx m =
     ( MonadCatch m
@@ -72,12 +70,13 @@ getTxFee
      => AccountId
      -> CId Addr
      -> Coin
+     -> InputSelectionPolicy
      -> m CCoin
-getTxFee srcAccount dstAccount coin = do
+getTxFee srcAccount dstAccount coin policy = do
     utxo <- getMoneySourceUtxo (AccountMoneySource srcAccount)
     outputs <- coinDistrToOutputs $ one (dstAccount, coin)
     TxFee fee <- rewrapTxError "Cannot compute transaction fee" $
-        eitherToThrow =<< runTxCreator (computeTxFee utxo outputs)
+        eitherToThrow =<< runTxCreator policy (computeTxFee utxo outputs)
     pure $ encodeCType fee
 
 data MoneySource
@@ -126,8 +125,9 @@ sendMoney
     => PassPhrase
     -> MoneySource
     -> NonEmpty (CId Addr, Coin)
+    -> InputSelectionPolicy
     -> m CTx
-sendMoney passphrase moneySource dstDistr = do
+sendMoney passphrase moneySource dstDistr policy = do
     let srcWallet = getMoneySourceWallet moneySource
     rootSk <- getSKById srcWallet
     checkPassMatches passphrase rootSk `whenNothing`
@@ -152,7 +152,7 @@ sendMoney passphrase moneySource dstDistr = do
     outputs <- coinDistrToOutputs dstDistr
     th <- rewrapTxError "Cannot send transaction" $ do
         (txAux, inpTxOuts') <-
-            prepareMTx getSinger srcAddrs outputs (relatedAccount, passphrase)
+            prepareMTx getSinger policy srcAddrs outputs (relatedAccount, passphrase)
 
         ts <- Just <$> getCurrentTimestamp
         let tx = taTx txAux
@@ -167,7 +167,7 @@ sendMoney passphrase moneySource dstDistr = do
 
     -- We add TxHistoryEntry's meta created by us in advance
     -- to make TxHistoryEntry in CTx consistent with entry in history.
-    addHistoryTxMeta srcWallet th
+    _ <- addHistoryTxMeta srcWallet th
     srcWalletAddrs <- getWalletAddrsSet Ever srcWallet
     diff <- getCurChainDifficulty
     fst <$> constructCTx srcWallet srcWalletAddrs diff th

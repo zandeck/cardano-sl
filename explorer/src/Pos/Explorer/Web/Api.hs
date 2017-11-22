@@ -15,26 +15,24 @@ module Pos.Explorer.Web.Api
        , TxsLast
        , TxsSummary
        , AddressSummary
-       , EpochSlotSearch
+       , EpochPages
+       , EpochSlots
        ) where
 
 import           Universum
 
-import           Control.Monad.Catch          (try)
-import           Data.Proxy                   (Proxy (Proxy))
+import           Control.Monad.Catch (try)
+import           Data.Proxy (Proxy (Proxy))
+import           Servant.API ((:<|>), (:>), Capture, Get, JSON, QueryParam)
+import           Servant.Server (ServantErr (..))
 
+import           Pos.Core (EpochIndex)
 import           Pos.Explorer.Web.ClientTypes (Byte, CAda, CAddress, CAddressSummary,
-                                               CAddressesFilter, CBlockEntry,
-                                               CBlockSummary, CGenesisAddressInfo,
-                                               CGenesisSummary, CHash, CTxBrief, CTxEntry,
-                                               CTxId, CTxSummary)
-import           Pos.Explorer.Web.Error       (ExplorerError)
-import           Pos.Types                    (EpochIndex)
-import           Pos.Util.Servant             (DQueryParam, ModifiesApiRes (..), VerbMod)
-import           Servant.API                  ((:<|>), (:>), Capture, Get, JSON,
-                                               QueryParam)
-import           Servant.Server               (ServantErr (..))
-
+                                               CAddressesFilter, CBlockEntry, CBlockSummary,
+                                               CGenesisAddressInfo, CGenesisSummary, CHash,
+                                               CTxBrief, CTxEntry, CTxId, CTxSummary)
+import           Pos.Explorer.Web.Error (ExplorerError)
+import           Pos.Util.Servant (DQueryParam, ModifiesApiRes (..), VerbMod)
 
 type PageNumber = Integer
 
@@ -109,11 +107,16 @@ type AddressSummary = API
     :> Capture "address" CAddress
     :> ExRes Get CAddressSummary
 
-type EpochSlotSearch = API
-    :> "search"
-    :> "epoch"
+type EpochPages = API
+    :> "epochs"
     :> Capture "epoch" EpochIndex
-    :> QueryParam "slot" Word16
+    :> QueryParam "page" Int
+    :> ExRes Get (Int, [CBlockEntry])
+
+type EpochSlots = API
+    :> "epochs"
+    :> Capture "epoch" EpochIndex
+    :> Capture "slot" Word16
     :> ExRes Get [CBlockEntry]
 
 type GenesisSummary = API
@@ -155,7 +158,8 @@ type ExplorerApi =
     :<|> TxsLast
     :<|> TxsSummary
     :<|> AddressSummary
-    :<|> EpochSlotSearch
+    :<|> EpochPages
+    :<|> EpochSlots
     :<|> GenesisSummary
     :<|> GenesisPagesTotal
     :<|> GenesisAddressInfo

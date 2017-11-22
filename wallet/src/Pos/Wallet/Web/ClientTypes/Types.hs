@@ -64,23 +64,23 @@ module Pos.Wallet.Web.ClientTypes.Types
 
 import           Universum
 
-import           Control.Lens          (makeLenses)
-import           Data.Default          (Default, def)
-import           Data.Hashable         (Hashable (..))
+import           Control.Lens (makeLenses)
+import           Data.Default (Default, def)
+import           Data.Hashable (Hashable (..))
 import qualified Data.Text.Buildable
 import           Data.Time.Clock.POSIX (POSIXTime)
-import           Data.Typeable         (Typeable)
-import           Data.Version          (Version)
-import           Formatting            (bprint, build, builder, shown, (%))
+import           Data.Typeable (Typeable)
+import           Data.Version (Version)
+import           Formatting (bprint, build, builder, shown, (%))
 import qualified Prelude
-import           Serokell.Util         (listJsonIndent)
-import           Servant.Multipart     (FileData)
+import           Serokell.Util (listJsonIndent)
+import           Servant.Multipart (FileData, Mem)
 
-import           Pos.Core.Types        (Coin, ScriptVersion, unsafeGetCoin)
-import           Pos.Types             (BlockVersion, ChainDifficulty, SoftwareVersion)
+import           Pos.Core.Types (BlockVersion, ChainDifficulty, Coin, ScriptVersion,
+                                 SoftwareVersion, unsafeGetCoin)
 import           Pos.Util.BackupPhrase (BackupPhrase)
-import           Pos.Util.LogSafe      (SecureLog (..), buildUnsecure)
-import           Pos.Util.Servant      (HasTruncateLogPolicy, WithTruncatedLog (..))
+import           Pos.Util.LogSafe (SecureLog (..), buildUnsecure)
+import           Pos.Util.Servant (HasTruncateLogPolicy, WithTruncatedLog (..))
 
 data SyncProgress = SyncProgress
     { _spLocalCD   :: ChainDifficulty
@@ -430,7 +430,8 @@ instance Buildable (SecureLog CTxMeta) where
 -- @PtxInNewestBlocks@ and @PtxPersisted@ states are merged into one
 -- not to provide information which conflicts with 'ctConfirmations'.
 data CPtxCondition
-    = CPtxApplying
+    = CPtxCreating  -- not for displaying to frontend
+    | CPtxApplying
     | CPtxInBlocks
     | CPtxWontApply
     | CPtxNotTracked  -- ^ tx was made not in this life
@@ -557,7 +558,7 @@ data CElectronCrashReport = CElectronCrashReport
     , cecProductName :: Text
     , cecProd        :: Text
     , cecCompanyName :: Text
-    , cecUploadDump  :: FileData
+    , cecUploadDump  :: FileData Mem
     } deriving (Show, Generic)
 
 ----------------------------------------------------------------------------

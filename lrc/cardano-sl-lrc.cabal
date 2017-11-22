@@ -30,8 +30,11 @@ library
 
   build-depends:       base
                      , bytestring
+                     , cardano-sl-binary
                      , cardano-sl-core
+                     , cardano-sl-crypto
                      , cardano-sl-db
+                     , cardano-sl-util
                      , conduit
                      , ether
                      , formatting
@@ -40,6 +43,7 @@ library
                      , log-warper
                      , node-sketch
                      , reflection
+                     , rocksdb-haskell
                      , text-format
                      , QuickCheck
                      , universum

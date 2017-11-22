@@ -21,41 +21,34 @@ module Pos.Wallet.Redirect
 
 import           Universum
 
-import           Control.Lens                   (views)
-import qualified Data.HashMap.Strict            as HM
-import           Data.Time.Units                (Millisecond)
-import           Ether.Internal                 (HasLens (..))
-import           System.Wlog                    (WithLogger, logWarning)
+import           Control.Lens (views)
+import qualified Data.HashMap.Strict as HM
+import           Data.Time.Units (Millisecond)
+import           Ether.Internal (HasLens (..))
+import           System.Wlog (WithLogger, logWarning)
 
-import           Pos.Block.Core                 (BlockHeader)
-import qualified Pos.Context                    as PC
-import           Pos.Core                       (ChainDifficulty, HasConfiguration,
-                                                 Timestamp, difficultyL,
-                                                 getCurrentTimestamp)
-import           Pos.Crypto                     (WithHash (..))
-import           Pos.DB.Block                   (MonadBlockDB)
-import           Pos.DB.DB                      (getTipHeader)
-import qualified Pos.GState                     as GS
-import           Pos.Shutdown                   (HasShutdownContext, triggerShutdown)
-import           Pos.Slotting                   (MonadSlots (..),
-                                                 getNextEpochSlotDuration)
-import           Pos.Txp                        (MonadTxpLocal (..), ToilVerFailure, Tx,
-                                                 TxAux (..), TxId, TxUndo,
-                                                 TxpNormalizeMempoolMode,
-                                                 TxpProcessTransactionMode,
-                                                 getLocalTxsNUndo, txNormalize,
-                                                 txProcessTransaction)
-import           Pos.Update.Context             (UpdateContext (ucDownloadedUpdate))
-import           Pos.Update.Poll.Types          (ConfirmedProposalState)
-import           Pos.Wallet.WalletMode          (MonadBlockchainInfo (..),
-                                                 MonadUpdates (..))
-import           Pos.Wallet.Web.Account         (AccountMode, getSKById)
-import           Pos.Wallet.Web.ClientTypes     (CId, Wal)
+import qualified Pos.Context as PC
+import           Pos.Core (ChainDifficulty, HasConfiguration, Timestamp, Tx, TxAux (..), TxId,
+                           TxUndo, difficultyL, getCurrentTimestamp)
+import           Pos.Core.Block (BlockHeader)
+import           Pos.Crypto (WithHash (..))
+import qualified Pos.DB.BlockIndex as DB
+import           Pos.DB.Class (MonadDBRead)
+import qualified Pos.DB.GState.Common as GS
+import           Pos.Shutdown (HasShutdownContext, triggerShutdown)
+import           Pos.Slotting (MonadSlots (..), getNextEpochSlotDuration)
+import           Pos.Txp (MonadTxpLocal (..), ToilVerFailure, TxpNormalizeMempoolMode,
+                          TxpProcessTransactionMode, getLocalTxsNUndo, txNormalize,
+                          txProcessTransaction)
+import           Pos.Update.Context (UpdateContext (ucDownloadedUpdate))
+import           Pos.Update.Poll.Types (ConfirmedProposalState)
+import           Pos.Wallet.WalletMode (MonadBlockchainInfo (..), MonadUpdates (..))
+import           Pos.Wallet.Web.Account (AccountMode, getSKById)
+import           Pos.Wallet.Web.ClientTypes (CId, Wal)
 import           Pos.Wallet.Web.Methods.History (addHistoryTxMeta)
-import qualified Pos.Wallet.Web.State           as WS
-import           Pos.Wallet.Web.Tracking        (THEntryExtra, buildTHEntryExtra,
-                                                 eskToWalletDecrCredentials,
-                                                 isTxEntryInteresting)
+import qualified Pos.Wallet.Web.State as WS
+import           Pos.Wallet.Web.Tracking (THEntryExtra, buildTHEntryExtra,
+                                          eskToWalletDecrCredentials, isTxEntryInteresting)
 
 ----------------------------------------------------------------------------
 -- BlockchainInfo
@@ -68,7 +61,7 @@ getLastKnownHeader =
     atomically . readTVar =<< view (lensOf @PC.LastKnownHeaderTag)
 
 type BlockchainInfoEnv ctx m =
-    ( MonadBlockDB m
+    ( MonadDBRead m
     , PC.MonadLastKnownHeader ctx m
     , PC.MonadProgressHeader ctx m
     , MonadReader ctx m
@@ -83,7 +76,7 @@ networkChainDifficultyWebWallet
     => m (Maybe ChainDifficulty)
 networkChainDifficultyWebWallet = getLastKnownHeader >>= \case
     Just lh -> do
-        thDiff <- view difficultyL <$> getTipHeader
+        thDiff <- view difficultyL <$> DB.getTipHeader
         let lhDiff = lh ^. difficultyL
         return . Just $ max thDiff lhDiff
     Nothing -> pure Nothing
@@ -94,7 +87,7 @@ localChainDifficultyWebWallet
 localChainDifficultyWebWallet = do
     -- Workaround: Make local chain difficulty monotonic
     prevMaxDifficulty <- fromMaybe 0 <$> GS.getMaxSeenDifficultyMaybe
-    currDifficulty <- view difficultyL <$> getTipHeader
+    currDifficulty <- view difficultyL <$> DB.getTipHeader
     return $ max prevMaxDifficulty currDifficulty
 
 connectedPeersWebWallet

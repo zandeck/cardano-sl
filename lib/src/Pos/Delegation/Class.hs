@@ -8,7 +8,6 @@ module Pos.Delegation.Class
        ( DlgMemPool
        , DelegationWrap (..)
        , dwMessageCache
-       , dwConfirmationCache
        , dwProxySKPool
        , dwPoolSize
        , dwTip
@@ -20,15 +19,15 @@ module Pos.Delegation.Class
 
 import           Universum
 
-import           Control.Lens               (makeLenses)
-import qualified Data.Cache.LRU             as LRU
-import           Data.Time.Clock            (UTCTime)
+import           Control.Lens (makeLenses)
+import qualified Data.Cache.LRU as LRU
+import           Data.Time.Clock (UTCTime)
 import           Serokell.Data.Memory.Units (Byte)
 
-import           Pos.Core                   (HeaderHash, ProxySKHeavy, ProxySKLight)
-import           Pos.Core.Configuration     (HasConfiguration)
-import           Pos.Delegation.Types       (DlgMemPool)
-import           Pos.Util.Util              (HasLens (..))
+import           Pos.Core (HeaderHash, ProxySKHeavy)
+import           Pos.Core.Configuration (HasConfiguration)
+import           Pos.Delegation.Types (DlgMemPool)
+import           Pos.Util.Util (HasLens (..))
 
 ---------------------------------------------------------------------------
 -- Delegation in-memory data
@@ -39,19 +38,17 @@ import           Pos.Util.Util              (HasLens (..))
 -- with LRU.lookup.
 -- | In-memory storage needed for delegation logic.
 data DelegationWrap = DelegationWrap
-    { _dwMessageCache      :: !(LRU.LRU (Either ProxySKLight ProxySKHeavy) UTCTime)
+    { _dwMessageCache :: !(LRU.LRU ProxySKHeavy UTCTime)
       -- ^ Message cache to prevent infinite propagation of useless
       -- certs.
-    , _dwConfirmationCache :: !(LRU.LRU ProxySKLight UTCTime)
-      -- ^ Confirmation cache for lightweight PSKs. Not used in endpoints tho.
-    , _dwProxySKPool       :: !DlgMemPool
+    , _dwProxySKPool  :: !DlgMemPool
       -- ^ Memory pool of hardweight proxy secret keys. Keys of this
       -- map are issuer public keys.
-    , _dwPoolSize          :: !Byte
+    , _dwPoolSize     :: !Byte
       -- ^ Size of '_dwProxySKPool' in bytes.
       -- It's not exact size for a variety of reasons, but it should be
       -- a good approximation.
-    , _dwTip               :: !HeaderHash
+    , _dwTip          :: !HeaderHash
       -- ^ Header tip 'DelegationWrap' is correct in relation to.
     }
 
@@ -69,7 +66,7 @@ type DelegationVar = TVar DelegationWrap
 -- | We're locking on the whole delegation wrap at once. Locking on
 -- independent components is better in performance, so there's a place
 -- for optimization here.
-type MonadDelegation ctx m = 
+type MonadDelegation ctx m =
     ( MonadReader ctx m
     , HasLens DelegationVar ctx DelegationVar
     , HasConfiguration

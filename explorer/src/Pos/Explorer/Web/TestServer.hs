@@ -8,27 +8,24 @@ module Pos.Explorer.Web.TestServer
 
 import           Universum
 
-import           Data.Time                      (defaultTimeLocale, parseTimeOrError)
-import           Data.Time.Clock.POSIX          (POSIXTime, utcTimeToPOSIXSeconds)
-import           Network.Wai                    (Application)
-import           Network.Wai.Handler.Warp       (run)
-import           Servant.API                    ((:<|>) ((:<|>)))
-import           Servant.Server                 (Handler, Server, serve)
+import           Data.Time (defaultTimeLocale, parseTimeOrError)
+import           Data.Time.Clock.POSIX (POSIXTime, utcTimeToPOSIXSeconds)
+import           Network.Wai (Application)
+import           Network.Wai.Handler.Warp (run)
+import           Servant.API ((:<|>) ((:<|>)))
+import           Servant.Server (Handler, Server, serve)
 
+import           Pos.Core (EpochIndex (..), mkCoin)
 import           Pos.Explorer.Aeson.ClientTypes ()
-import           Pos.Explorer.Web.Api           (ExplorerApi, explorerApi)
-import           Pos.Explorer.Web.ClientTypes   (Byte, CAda (..), CAddress (..),
-                                                 CAddressSummary (..), CAddressType (..),
-                                                 CAddressesFilter (..), CBlockEntry (..),
-                                                 CBlockSummary (..),
-                                                 CGenesisAddressInfo (..),
-                                                 CGenesisSummary (..), CHash (..),
-                                                 CTxBrief (..), CTxEntry (..), CTxId (..),
-                                                 CTxSummary (..), mkCCoin)
-import           Pos.Explorer.Web.Error         (ExplorerError (Internal))
-import           Pos.Types                      (EpochIndex (..), mkCoin)
-import           Pos.Web                        ()
-
+import           Pos.Explorer.Web.Api (ExplorerApi, explorerApi)
+import           Pos.Explorer.Web.ClientTypes (Byte, CAda (..), CAddress (..), CAddressSummary (..),
+                                               CAddressType (..), CAddressesFilter (..),
+                                               CBlockEntry (..), CBlockSummary (..),
+                                               CGenesisAddressInfo (..), CGenesisSummary (..),
+                                               CHash (..), CTxBrief (..), CTxEntry (..), CTxId (..),
+                                               CTxSummary (..), mkCCoin)
+import           Pos.Explorer.Web.Error (ExplorerError (..))
+import           Pos.Web ()
 
 ----------------------------------------------------------------
 -- Top level functionality
@@ -63,6 +60,8 @@ explorerHandlers =
     :<|>
       apiAddressSummary
     :<|>
+      apiEpochPageSearch
+    :<|>
       apiEpochSlotSearch
     :<|>
       apiGenesisSummary
@@ -81,6 +80,7 @@ explorerHandlers =
     apiTxsLast            = testTxsLast
     apiTxsSummary         = testTxsSummary
     apiAddressSummary     = testAddressSummary
+    apiEpochPageSearch    = testEpochPageSearch
     apiEpochSlotSearch    = testEpochSlotSearch
     apiGenesisSummary     = testGenesisSummary
     apiGenesisPagesTotal  = testGenesisPagesTotal
@@ -178,7 +178,7 @@ testBlocksTxs
 testBlocksTxs _ _ _ = pure [cTxBrief]
 
 testTxsLast :: Handler [CTxEntry]
-testTxsLast         = pure [cTxEntry]
+testTxsLast = pure [cTxEntry]
 
 testTxsSummary
     :: CTxId
@@ -211,16 +211,16 @@ testAddressSummary _  = pure sampleAddressSummary
 
 testEpochSlotSearch
     :: EpochIndex
-    -> Maybe Word16
+    -> Word16
     -> Handler [CBlockEntry]
 -- `?epoch=1&slot=1` returns an empty list
-testEpochSlotSearch (EpochIndex 1) (Just 1) =
+testEpochSlotSearch (EpochIndex 1) 1 =
     pure []
 -- `?epoch=1&slot=2` returns an error
-testEpochSlotSearch (EpochIndex 1) (Just 2) =
+testEpochSlotSearch (EpochIndex 1) 2 =
     throwM $ Internal "Error while searching epoch/slot"
 -- all others returns a simple result
-testEpochSlotSearch _ _ = pure [ CBlockEntry
+testEpochSlotSearch _ _ = pure [CBlockEntry
     { cbeEpoch      = 37294
     , cbeSlot       = 10
     , cbeBlkHash    = CHash "75aa93bfa1bf8e6aa913bc5fa64479ab4ffc1373a25c8176b61fa1ab9cbae35d"
@@ -231,6 +231,22 @@ testEpochSlotSearch _ _ = pure [ CBlockEntry
     , cbeBlockLead  = Nothing
     , cbeFees       = mkCCoin $ mkCoin 0
     }]
+
+testEpochPageSearch
+    :: EpochIndex
+    -> Maybe Int
+    -> Handler (Int, [CBlockEntry])
+testEpochPageSearch _ _ = pure (1, [CBlockEntry
+    { cbeEpoch      = 37294
+    , cbeSlot       = 10
+    , cbeBlkHash    = CHash "75aa93bfa1bf8e6aa913bc5fa64479ab4ffc1373a25c8176b61fa1ab9cbae35d"
+    , cbeTimeIssued = Just posixTime
+    , cbeTxNum      = 0
+    , cbeTotalSent  = mkCCoin $ mkCoin 0
+    , cbeSize       = 390
+    , cbeBlockLead  = Nothing
+    , cbeFees       = mkCCoin $ mkCoin 0
+    }])
 
 testGenesisSummary
     :: Handler CGenesisSummary

@@ -26,21 +26,21 @@ module Pos.Core.Genesis.Types
 
 import           Universum
 
-import           Control.Monad.Except     (MonadError (throwError))
-import           Data.Hashable            (Hashable)
-import qualified Data.HashMap.Strict      as HM
-import qualified Data.Text.Buildable      as Buildable
-import           Fmt                      (genericF)
-import           Formatting               (bprint, build, fixed, int, (%))
-import           Serokell.Util            (allDistinct, mapJson)
+import           Control.Monad.Except (MonadError (throwError))
+import           Data.Hashable (Hashable)
+import qualified Data.HashMap.Strict as HM
+import qualified Data.Text.Buildable as Buildable
+import           Fmt (genericF)
+import           Formatting (bprint, build, fixed, int, (%))
+import           Serokell.Util (allDistinct, mapJson)
 
-import           Pos.Binary.Crypto        ()
-import           Pos.Core.Coin            ()
-import           Pos.Core.Types           (Address, BlockVersionData, Coin, CoinPortion,
-                                           ProxySKHeavy, SharedSeed, StakeholderId,
-                                           Timestamp)
-import           Pos.Core.Vss.Types       (VssCertificatesMap, getVssCertificatesMap)
-import           Pos.Crypto.Signing.Types (RedeemPublicKey)
+import           Pos.Binary.Crypto ()
+import           Pos.Core.Coin ()
+import           Pos.Core.Types (Address, BlockVersionData, Coin, CoinPortion, ProxySKHeavy,
+                                 SharedSeed, StakeholderId, Timestamp)
+import           Pos.Core.Vss.Types (VssCertificatesMap, getVssCertificatesMap)
+import           Pos.Crypto.Configuration (ProtocolMagic)
+import           Pos.Crypto.Signing (RedeemPublicKey)
 
 -- | Wrapper around weighted stakeholders map to be used in genesis
 -- core data.
@@ -207,7 +207,7 @@ data ProtocolConstants = ProtocolConstants
     { -- | Security parameter from the paper.
       pcK             :: !Int
       -- | Magic constant for separating real/testnet.
-    , pcProtocolMagic :: !Int32
+    , pcProtocolMagic :: !ProtocolMagic
       -- | VSS certificates max timeout to live (number of epochs).
     , pcVssMaxTTL     :: !Word32
       -- | VSS certificates min timeout to live (number of epochs).

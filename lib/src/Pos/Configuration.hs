@@ -21,7 +21,6 @@ module Pos.Configuration
        , messageCacheTimeout
 
        -- * Delegation
-       , lightDlgConfirmationTimeout
        , dlgCacheParam
 
        -- * Malicious activity detection constants
@@ -33,14 +32,14 @@ module Pos.Configuration
 
 import           Universum
 
-import           Data.Aeson             (FromJSON (..), genericParseJSON)
-import           Data.Reflection        (Given (..), give)
-import           Data.Time.Units        (Microsecond, Second)
+import           Data.Aeson (FromJSON (..), genericParseJSON)
+import           Data.Reflection (Given (..), give)
+import           Data.Time.Units (Microsecond, Second)
 import           Serokell.Aeson.Options (defaultOptions)
-import           Serokell.Util          (ms, sec)
-import qualified Text.Parsec            as P
+import           Serokell.Util (ms, sec)
+import qualified Text.Parsec as P
 
-import           Pos.Util.TimeWarp      (NetworkAddress, addrParser)
+import           Pos.Util.TimeWarp (NetworkAddress, addrParser)
 
 type HasNodeConfiguration = Given NodeConfiguration
 
@@ -59,8 +58,6 @@ data NodeConfiguration = NodeConfiguration
       -- ^ List of default peers
     , ccMdNoBlocksSlotThreshold      :: !Int
       -- ^ Threshold of slots for malicious activity detection
-    , ccLightDlgConfirmationTimeout  :: !Int
-      -- ^ Timeout for holding light psks confirmations
     , ccDlgCacheParam                :: !Int
       -- ^ This value parameterizes size of cache used in Delegation.
       -- Not bytes, but number of elements.
@@ -136,10 +133,6 @@ messageCacheTimeout = fromIntegral . ccMessageCacheTimeout $ nodeConfiguration
 ----------------------------------------------------------------------------
 -- Delegation
 ----------------------------------------------------------------------------
-
--- | Amount of time we hold confirmations for light PSKs.
-lightDlgConfirmationTimeout :: (HasNodeConfiguration, Integral a) => a
-lightDlgConfirmationTimeout = fromIntegral . ccLightDlgConfirmationTimeout $ nodeConfiguration
 
 -- | This value parameterizes size of cache used in Delegation.
 -- Not bytes, but number of elements.

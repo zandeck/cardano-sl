@@ -2,10 +2,8 @@
 
 module Pos.Core.Types
        (
-         ProtocolMagic (..)
-
        -- * Address and StakeholderId
-       , AddressHash
+         AddressHash
        , AddrSpendingData (..)
        , AddrType (..)
        , Address' (..)
@@ -86,35 +84,30 @@ module Pos.Core.Types
 
 import           Universum
 
-import           Control.Lens               (makeLensesFor, makePrisms)
-import           Control.Monad.Except       (MonadError (throwError))
-import           Crypto.Hash                (Blake2b_224)
-import           Data.Char                  (isAscii)
-import           Data.Data                  (Data)
-import           Data.Hashable              (Hashable (..))
-import           Data.Ix                    (Ix)
-import qualified Data.Text                  as T
-import qualified Data.Text.Buildable        as Buildable
-import           Data.Time.Units            (Millisecond)
-import           Formatting                 (Format, bprint, build, formatToString, int,
-                                             ords, shown, stext, (%))
-import qualified PlutusCore.Program         as PLCore
+import           Control.Lens (makeLensesFor, makePrisms)
+import           Control.Monad.Except (MonadError (throwError))
+import           Crypto.Hash (Blake2b_224)
+import           Data.Char (isAscii)
+import           Data.Data (Data)
+import           Data.Hashable (Hashable (..))
+import           Data.Ix (Ix)
+import qualified Data.Text as T
+import qualified Data.Text.Buildable as Buildable
+import           Data.Time.Units (Millisecond)
+import           Formatting (Format, bprint, build, formatToString, int, ords, shown, stext, (%))
+import qualified PlutusCore.Program as PLCore
 import qualified Prelude
-import           Serokell.AcidState         ()
+import           Serokell.AcidState ()
 import           Serokell.Data.Memory.Units (Byte)
-import           Serokell.Util.Base16       (formatBase16)
-import           System.Random              (Random (..))
+import           Serokell.Util.Base16 (formatBase16)
+import           System.Random (Random (..))
 
-import           Pos.Core.Fee               (TxFeePolicy)
-import           Pos.Core.Timestamp         (TimeDiff (..), Timestamp (..))
-import           Pos.Crypto.Hashing         (AbstractHash, Hash)
-import           Pos.Crypto.HD              (HDAddressPayload)
-import           Pos.Crypto.Signing.Types   (ProxySecretKey, ProxySignature, PublicKey,
-                                             RedeemPublicKey)
-import           Pos.Data.Attributes        (Attributes)
-
-newtype ProtocolMagic = ProtocolMagic { getProtocolMagic :: Int32 }
-    deriving (Show)
+import           Pos.Core.Fee (TxFeePolicy)
+import           Pos.Core.Timestamp (TimeDiff (..), Timestamp (..))
+import           Pos.Crypto.Hashing (AbstractHash, Hash)
+import           Pos.Crypto.HD (HDAddressPayload)
+import           Pos.Crypto.Signing (ProxySecretKey, ProxySignature, PublicKey, RedeemPublicKey)
+import           Pos.Data.Attributes (Attributes)
 
 ----------------------------------------------------------------------------
 -- Address, StakeholderId
@@ -350,12 +343,17 @@ headerHashF = build
 -- Proxy signatures and delegation
 ----------------------------------------------------------------------------
 
+-- Notice: light delegation was removed as part of CSL-1856 and should
+-- be reworked later. Though some parts of it are left to support
+-- backward compatibility.
+
 -- | Proxy signature, that holds a pair of epoch indices. Block is
 -- valid if its epoch index is inside this range.
 type ProxySigLight a = ProxySignature (EpochIndex, EpochIndex) a
 
 -- | Same alias for the proxy secret key (see 'ProxySigLight').
 type ProxySKLight = ProxySecretKey (EpochIndex, EpochIndex)
+
 
 -- | Simple proxy signature without ttl/epoch index
 -- constraints. 'EpochIndex' inside is needed for replay attack

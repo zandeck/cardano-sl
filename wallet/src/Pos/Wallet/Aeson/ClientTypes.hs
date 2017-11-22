@@ -4,23 +4,25 @@ module Pos.Wallet.Aeson.ClientTypes
 
 import           Universum
 
-import           Data.Aeson                   (FromJSON (..), ToJSON (..), object, (.=))
-import           Data.Aeson.TH                (defaultOptions, deriveJSON, deriveToJSON)
-import           Data.Version                 (showVersion)
+import           Data.Aeson (FromJSON (..), ToJSON (..), object, (.=))
+import           Data.Aeson.TH (defaultOptions, deriveJSON, deriveToJSON)
+import           Data.Version (showVersion)
 
-import           Pos.Core.Types               (SoftwareVersion (..))
-import           Pos.Util.BackupPhrase        (BackupPhrase)
-import           Pos.Wallet.Web.ClientTypes   (Addr, ApiVersion (..), CAccount,
-                                               CAccountId, CAccountInit, CAccountMeta,
-                                               CAddress, CCoin, CFilePath (..), CHash,
-                                               CId, CInitialized, CPaperVendWalletRedeem,
-                                               CProfile, CPtxCondition, CTExMeta, CTx,
-                                               CTxId, CTxMeta, CUpdateInfo, CWAddressMeta,
-                                               CWallet, CWalletAssurance, CWalletInit,
-                                               CWalletMeta, CWalletRedeem,
-                                               ClientInfo (..), SyncProgress, Wal)
-import           Pos.Wallet.Web.Error         (WalletError)
+import           Pos.Client.Txp.Util (InputSelectionPolicy)
+import           Pos.Core.Types (SoftwareVersion (..))
+import           Pos.Util.BackupPhrase (BackupPhrase)
+import           Pos.Wallet.Aeson.Options (customOptionsWithTag)
+import           Pos.Wallet.Web.ClientTypes (Addr, ApiVersion (..), CAccount, CAccountId,
+                                             CAccountInit, CAccountMeta, CAddress, CCoin,
+                                             CFilePath (..), CHash, CId, CInitialized,
+                                             CPaperVendWalletRedeem, CProfile, CPtxCondition,
+                                             CTExMeta, CTx, CTxId, CTxMeta, CUpdateInfo,
+                                             CWAddressMeta, CWallet, CWalletAssurance, CWalletInit,
+                                             CWalletMeta, CWalletRedeem, ClientInfo (..),
+                                             SyncProgress, Wal)
+import           Pos.Wallet.Web.Error (WalletError)
 import           Pos.Wallet.Web.Sockets.Types (NotifyEvent)
+import           Servant.API.ContentTypes (NoContent (..))
 
 deriveJSON defaultOptions ''CAccountId
 deriveJSON defaultOptions ''CWAddressMeta
@@ -39,6 +41,7 @@ deriveJSON defaultOptions ''Wal
 deriveJSON defaultOptions ''Addr
 deriveJSON defaultOptions ''CHash
 deriveJSON defaultOptions ''CInitialized
+deriveJSON (customOptionsWithTag "groupingPolicy") ''InputSelectionPolicy
 
 deriveJSON defaultOptions ''CCoin
 deriveJSON defaultOptions ''CTxId
@@ -70,3 +73,6 @@ instance ToJSON ClientInfo where
             , "cabalVersion" .= showVersion ciCabalVersion
             , "apiVersion" .= ciApiVersion
             ]
+
+instance ToJSON NoContent where
+    toJSON NoContent = toJSON ()

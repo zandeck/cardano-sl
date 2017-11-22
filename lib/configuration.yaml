@@ -113,7 +113,6 @@ dev: &dev
     networkDiameter: 3
     defaultPeers: []
     mdNoBlocksSlotThreshold: 3 # should be less than 2 * k
-    lightDlgConfirmationTimeout: 500
     dlgCacheParam: 500
     recoveryHeadersMessage: 20 # should be greater than k
     messageCacheTimeout: 30
@@ -297,7 +296,6 @@ mainnet_base: &mainnet_base
     networkDiameter: 18
     defaultPeers: []
     mdNoBlocksSlotThreshold: 18 # should be less than 2 * k
-    lightDlgConfirmationTimeout: 500
     dlgCacheParam: 500
     recoveryHeadersMessage: 2200 # should be greater than k
     messageCacheTimeout: 30
@@ -14845,7 +14843,7 @@ mainnet_dryrun_wallet_win64: &mainnet_dryrun_wallet_win64
   update:
     <<:
     applicationName: csl-daedalus
-    applicationVersion: 3
+    applicationVersion: 5
     lastKnownBlockVersion:
       bvMajor: 0
       bvMinor: 1
@@ -14857,7 +14855,7 @@ mainnet_dryrun_wallet_macos64: &mainnet_dryrun_wallet_macos64
   update:
     <<:
     applicationName: csl-daedalus
-    applicationVersion: 3
+    applicationVersion: 5
     lastKnownBlockVersion:
       bvMajor: 0
       bvMinor: 1
@@ -14877,7 +14875,7 @@ mainnet_staging_short_epoch_full: &mainnet_staging_short_epoch_full
     genesis:
       src:
         file: mainnet-staging-short-epoch-genesis.json
-        hash: f73231256fe6784c408e8a31b7bb8250f80ce64fdbdec137ad1da2faa257a166
+        hash: e7a53de0c136f1da2a8591cac6150ea790dbe428b5f7aa840d2ea210cbb00673
   update:
     <<:
     applicationName: cardano-sl
@@ -14970,7 +14968,7 @@ devnet: &devnet
           testnetInitializer:
             testBalance:
               poors:        200 # should be enough for developers
-              richmen:      4   # this is the number of core nodes,
+              richmen:      3   # this is the number of core nodes,
                                 # set to desired value
               richmenShare: 0.96
               totalBalance: 13887504355000000

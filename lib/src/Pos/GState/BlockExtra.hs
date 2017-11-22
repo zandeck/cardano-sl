@@ -19,23 +19,23 @@ module Pos.GState.BlockExtra
 import           Universum
 
 import qualified Data.Text.Buildable
-import qualified Database.RocksDB     as Rocks
-import           Formatting           (bprint, build, (%))
-import           Serokell.Util.Text   (listJson)
+import qualified Database.RocksDB as Rocks
+import           Formatting (bprint, build, (%))
+import           Serokell.Util.Text (listJson)
 
-import           Pos.Binary.Class     (serialize')
-import           Pos.Block.Core       (Block, BlockHeader)
+import           Pos.Binary.Class (serialize')
 import           Pos.Block.Slog.Types (LastBlkSlots, noLastBlkSlots)
-import           Pos.Core             (FlatSlotId, HasConfiguration, HasHeaderHash,
-                                       HeaderHash, genesisHash, headerHash, slotIdF,
-                                       unflattenSlotId)
-import           Pos.Crypto           (shortHashF)
-import           Pos.DB               (DBError (..), MonadDB, MonadDBRead,
-                                       RocksBatchOp (..), dbSerializeValue)
-import           Pos.DB.Block         (MonadBlockDB, blkGetBlock, blkGetHeader)
+import           Pos.Core (FlatSlotId, HasConfiguration, HasHeaderHash, HeaderHash, genesisHash,
+                           headerHash, slotIdF, unflattenSlotId)
+import           Pos.Core.Block (Block, BlockHeader)
+import           Pos.Crypto (shortHashF)
+import           Pos.DB (DBError (..), MonadDB, MonadDBRead (..), RocksBatchOp (..),
+                         dbSerializeValue)
+import           Pos.DB.BlockIndex (getHeader)
+import           Pos.DB.Class (MonadBlockDBRead, getBlock)
 import           Pos.DB.GState.Common (gsGetBi, gsPutBi)
-import           Pos.Util.Chrono      (OldestFirst (..))
-import           Pos.Util.Util        (maybeThrow)
+import           Pos.Util.Chrono (OldestFirst (..))
+import           Pos.Util.Util (maybeThrow)
 
 ----------------------------------------------------------------------------
 -- Getters
@@ -156,20 +156,20 @@ loadUpWhile getDatum morph start condition = OldestFirst . reverse <$>
 
 -- | Returns headers loaded up.
 loadHeadersUpWhile
-    :: (MonadBlockDB m, HasHeaderHash a)
+    :: (MonadBlockDBRead m, HasHeaderHash a)
     => a
     -> (BlockHeader -> Int -> Bool)
     -> m (OldestFirst [] BlockHeader)
 loadHeadersUpWhile start condition =
-    loadUpWhile blkGetHeader identity start condition
+    loadUpWhile getHeader identity start condition
 
 -- | Returns blocks loaded up.
 loadBlocksUpWhile
-    :: (MonadBlockDB m, HasHeaderHash a)
+    :: (MonadBlockDBRead m, HasHeaderHash a)
     => a
     -> (Block -> Int -> Bool)
     -> m (OldestFirst [] Block)
-loadBlocksUpWhile start condition = loadUpWhile blkGetBlock identity start condition
+loadBlocksUpWhile start condition = loadUpWhile getBlock identity start condition
 
 ----------------------------------------------------------------------------
 -- Initialization
