@@ -22,12 +22,15 @@ effects will affect the entire codebase in drastic ways, since the effects are
 so ubiqutous. This means that it's impossible to quickly try each possible
 approach, one must rewrite half the application to do so.
 
+History
+----------
+
 In Cardano SL we've used multiple approaches to effects, none of them
 satisfactory. The goal of this document is to provide a reference point for
 discussion about further direction of travel.
 
 The Stone Age
--------------
+~~~~~~~~~~~~~~
 
 The first approach to effects that was used in Cardano SL was simple: for each
 effect, create a class with operations and a monad transformer that implements
@@ -110,7 +113,7 @@ Conclusion:
 
 
 The Bronze Age
---------------
+~~~~~~~~~~~~~~~
 
 The core observation is that many domain-specific effects are isomorphic to
 general purpose ones. The majority of monad transformers in Cardano SL were
@@ -176,7 +179,7 @@ Conclusion:
   performance marked this approach a no-go.
 
 The Modern Era
---------------
+---------------
 
 After we've realized what led to bad compile-time performance, @int-index came up with an
 idea of ``ExecMode``. Basically, we continued to use classes from ``Ether``, but
@@ -330,8 +333,8 @@ because it's very easy to misuse them. A good effect system should take care of
 things like this. (But perhaps it's an overegenralization and it's only bad to unlift,
 whereas lifting is straightforward).
 
-Future Plans
-------------
+Problem definition
+------------------------
 
 Informed by previous failures, we are in a position to finally find a good
 approach to monadic effects in our code. Ideally, with all of the pros and
