@@ -80,7 +80,7 @@ Cons:
   ``ReaderT a (ReaderT b (ReaderT c (ReaderT d m)))`` (same goes for ``StateT``,
   ``WriterT``, ``ExceptT``, etc). Since transformers for many domain-specific
   effects are isomorphic to one of these general purpose effects, having a dozen
-  of nested transformers isn't such a good idea. (I have benchmarks to back up
+  of nested transformers isn't such a good idea. (@int-index has benchmarks to back up
   this claim).
 
 * No run-time configurability. The stack of transformers determines at
@@ -165,8 +165,8 @@ Cons:
   to a GHC bug, the compile-time performance was devastating. Turning ``-O2``
   could mean hours of compilation and required up to 65 GIGABYTES of RAM
   (ridiculous!). This was because GHC generated an exponential amount of
-  coercions (as evidenced by investigating .hi-files). Basically, I no longer
-  can recommend Ether to people as I have no good solution to this.
+  coercions (as evidenced by investigating .hi-files). Basically, @int-index no longer
+  can recommend Ether to people as there is no good solution to this known.
 
 Conclusion:
 
@@ -178,7 +178,7 @@ Conclusion:
 The Modern Era
 --------------
 
-After we've realized what led to bad compile-time performance, I came up with an
+After we've realized what led to bad compile-time performance, @int-index came up with an
 idea of ``ExecMode``. Basically, we continued to use classes from ``Ether``, but
 rather than having numerous ``IdentityT`` layers there was a single ``newtype``
 wrapper around ``ReaderT ModeEnv Production`` at the bottom. This solved the
@@ -291,11 +291,13 @@ One of the problems with `SendActions` is its use of natural transformations. We
 have a helper `hoistSendActions`, and right now we horribly misuse it. Since
 ``m`` in ``SendActions m`` is in an invariant position, we need
 `hoistSendActions` to convert ``SendActions n`` to ``SendActions m``, and it
-requires two natural transformations: ``n ~> m`` and ``m ~> n``. First,
+requires two natural transformations: ``n ~> m`` and ``m ~> n``.
+
+First,
 providing these transformations is an inconvenience (first one tends to be a
 mere lift, but the second one must do certain tricks to unlift). Second, it
-introduces a potential for horrible, subtle bugs. As I said, right now we misuse
-this helper, and I say that because we call it in a runner, `runRealMode`;
+introduces a potential for horrible, subtle bugs. As was said, right now we misuse
+this helper, in particular because we call it in a runner, `runRealMode`;
 therefore, the unlift natural transformation must reconstruct the monadic
 context from what it has at transformer stack initialization site, not at
 conversation fork site; therefore, any local modifications to the monad
@@ -314,7 +316,7 @@ might be not at all what a programmer would expect.
 
 The moral of this story is that, perhaps, explicit dictionaries are a bad design
 because it's very easy to misuse them. A good effect system should take care of
-things like this. (But perhaps I'm overegenralizing and it's only bad to unlift,
+things like this. (But perhaps it's an overegenralization and it's only bad to unlift,
 whereas lifting is straightforward).
 
 Future Plans
