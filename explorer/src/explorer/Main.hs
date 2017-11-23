@@ -8,32 +8,33 @@ module Main where
 
 import           Universum
 
-import           Data.Maybe          (fromJust)
-import           Formatting          (sformat, shown, (%))
-import           Mockable            (Production, currentTime, runProduction)
-import           System.Wlog         (logInfo)
+import           Control.Exception.Safe (handleAny)
+import           Data.Maybe             (fromJust)
+import           Formatting             (sformat, shown, (%))
+import           Mockable               (Production, currentTime, runProduction)
+import           System.Wlog            (logError, logInfo, usingLoggerName)
 
-import           Pos.Binary          ()
-import qualified Pos.Client.CLI      as CLI
-import           Pos.Communication   (OutSpecs, WorkerSpec)
-import           Pos.Constants       (isDevelopment)
-import           Pos.Core            (gdStartTime, genesisData)
-import           Pos.Explorer        (runExplorerBListener)
-import           Pos.Explorer.Socket (NotifierSettings (..))
-import           Pos.Explorer.Web    (ExplorerProd, explorerPlugin, notifierPlugin)
-import           Pos.Launcher        (HasConfigurations, NodeParams (..),
-                                      NodeResources (..), bracketNodeResources,
-                                      hoistNodeResources, loggerBracket, runNode,
-                                      runRealBasedMode, withConfigurations)
-import           Pos.Ssc.GodTossing  (SscGodTossing)
-import           Pos.Types           (Timestamp (Timestamp))
-import           Pos.Update          (updateTriggerWorker)
-import           Pos.Util            (inAssertMode, mconcatPair)
-import           Pos.Util.UserSecret (usVss)
+import           Pos.Binary             ()
+import qualified Pos.Client.CLI         as CLI
+import           Pos.Communication      (OutSpecs, WorkerSpec)
+import           Pos.Constants          (isDevelopment)
+import           Pos.Core               (gdStartTime, genesisData)
+import           Pos.Explorer           (runExplorerBListener)
+import           Pos.Explorer.Socket    (NotifierSettings (..))
+import           Pos.Explorer.Web       (ExplorerProd, explorerPlugin, notifierPlugin)
+import           Pos.Launcher           (HasConfigurations, NodeParams (..),
+                                         NodeResources (..), bracketNodeResources,
+                                         hoistNodeResources, loggerBracket, runNode,
+                                         runRealBasedMode, withConfigurations)
+import           Pos.Ssc.GodTossing     (SscGodTossing)
+import           Pos.Types              (Timestamp (Timestamp))
+import           Pos.Update             (updateTriggerWorker)
+import           Pos.Util               (inAssertMode, mconcatPair)
+import           Pos.Util.UserSecret    (usVss)
 
-import           ExplorerOptions     (Args (..), ExplorerNodeArgs (..),
-                                      getExplorerOptions)
-import           Params              (getNodeParams, gtSscParams)
+import           ExplorerOptions        (Args (..), ExplorerNodeArgs (..),
+                                         getExplorerOptions)
+import           Params                 (getNodeParams, gtSscParams)
 
 printFlags :: IO ()
 printFlags = do
@@ -50,7 +51,7 @@ main :: IO ()
 main = do
     args <- getExplorerOptions
     let loggingParams = CLI.loggingParams "node" (enaCommonNodeArgs args)
-    loggerBracket loggingParams $ do
+    loggerBracket loggingParams . handleAny (usingLoggerName "auxx" . logError . show) $ do
         printFlags
         runProduction $ action (enaExplorerArgs args)
 

@@ -5,25 +5,26 @@ module Main
 import           Universum
 import           Unsafe              (unsafeFromJust)
 
-import           Formatting          (sformat, shown, (%))
-import           Mockable            (Production, currentTime, runProduction)
-import           System.Wlog         (logInfo)
+import           Control.Exception.Safe (handleAny)
+import           Formatting             (sformat, shown, (%))
+import           Mockable               (Production, currentTime, runProduction)
+import           System.Wlog            (logError, logInfo, usingLoggerName)
 
-import qualified Pos.Client.CLI      as CLI
-import           Pos.Core            (Timestamp (..), gdStartTime, genesisData)
-import           Pos.Launcher        (NodeParams (..), bracketNodeResources,
-                                      loggerBracket, runRealBasedMode, withConfigurations)
-import           Pos.Network.Types   (NetworkConfig (..), Topology (..),
-                                      topologyDequeuePolicy, topologyEnqueuePolicy,
-                                      topologyFailurePolicy)
-import           Pos.Ssc.SscAlgo     (SscAlgo (GodTossingAlgo))
-import           Pos.Util.UserSecret (usVss)
-import           Pos.WorkMode        (RealMode)
+import qualified Pos.Client.CLI         as CLI
+import           Pos.Core               (Timestamp (..), gdStartTime, genesisData)
+import           Pos.Launcher           (NodeParams (..), bracketNodeResources,
+                                         loggerBracket, runRealBasedMode, withConfigurations)
+import           Pos.Network.Types      (NetworkConfig (..), Topology (..),
+                                         topologyDequeuePolicy, topologyEnqueuePolicy,
+                                         topologyFailurePolicy)
+import           Pos.Ssc.SscAlgo        (SscAlgo (GodTossingAlgo))
+import           Pos.Util.UserSecret    (usVss)
+import           Pos.WorkMode           (RealMode)
 
-import           AuxxOptions         (AuxxOptions (..), getAuxxOptions)
-import           Mode                (AuxxContext (..), AuxxMode, AuxxSscType,
-                                      CmdCtx (..), realModeToAuxx)
-import           Plugin              (auxxPlugin)
+import           AuxxOptions            (AuxxOptions (..), getAuxxOptions)
+import           Mode                   (AuxxContext (..), AuxxMode, AuxxSscType,
+                                         CmdCtx (..), realModeToAuxx)
+import           Plugin                 (auxxPlugin)
 
 -- 'NodeParams' obtained using 'CLI.getNodeParams' are not perfect for
 -- Auxx, so we need to adopt them slightly.
@@ -72,4 +73,5 @@ main :: IO ()
 main = do
   opts <- getAuxxOptions
   let loggingParams = CLI.loggingParams "auxx" (aoCommonNodeArgs opts)
-  loggerBracket loggingParams . runProduction $ action opts
+  loggerBracket loggingParams . handleAny (usingLoggerName "auxx" . logError . show) $ do
+      runProduction $ action opts

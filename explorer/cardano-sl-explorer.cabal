@@ -141,6 +141,7 @@ executable cardano-explorer
                      , node-sketch
                      , optparse-simple
                      , universum
+                     , safe-exceptions
                      , serokell-util
                      , time
                      , time-units
