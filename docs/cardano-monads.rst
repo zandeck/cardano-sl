@@ -199,6 +199,17 @@ of our custom classes yet. Just to clarify: in this section we'll discuss the
 current transitional state, and it's more painful than what was actually
 proposed by FPComplete.
 
+
+Also, there is compliсation, that we have three aproaches combined:
+	
+* General approach a la ExecMode(s)
+* Usage of reflection (which is in fact custom case for ReaderT for constant data within single execution)
+* Method dictionaries (for supporting SendActions, a primitive from networking)
+
+
+General approach: XxxMode
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 Now our code follows this pattern::
 
     -- effect definitions
@@ -263,7 +274,7 @@ Conclusion:
 * Current solution requires huge swaths of boilerplate code, it's hard to
   reason about the code, and it's inflexible. We must seek other options.
 
-Addendum: reflection
+Usage of reflection
 ~~~~~~~~~~~~~~~~~~~~
 
 To pass constant configuration to application components, instead of
@@ -273,7 +284,7 @@ To pass constant configuration to application components, instead of
 cut the potential amount of custom classes greatly, and the configs are
 available even in class instances (such as ``Bi``).
 
-Addendum: SendActions
+Usage of SendActions
 ~~~~~~~~~~~~~~~~~~~~~
 
 `SendActions` is another effect which is implemented differently from everything
@@ -420,3 +431,23 @@ Point-by-point rundown:
   `ReaderT`.
 
 Verdict: the approach is viable but has its costs.
+
+
+Dictionary-passing style
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Very similar to previous approach and one was widely used by Networking team.
+
+As we understand ideas behind it:
+
+- Single base monad
+
+  - Similarly to `ReaderT IO` approach
+
+- Differentiating implementations all stored in records
+
+  - No type classes and instances like `instance MyClass (ReaderT Ctx IO)`
+  - Each function accepts a single **explicit** parameter of type `Ctx m`
+  - This type `Ctx` contains all needed methods
+
+*TODO* analyze by criterias
