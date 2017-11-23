@@ -203,14 +203,14 @@ current transitional state, and it's more painful than what was actually
 proposed by FPComplete.
 
 
-Also, there is compliсation, that we have three aproaches combined:
+Also, there is compliсation, that we actually have three aproaches combined:
 	
 * General approach a la ExecMode(s)
 * Usage of reflection (which is in fact custom case for ReaderT for constant data within single execution)
 * Method dictionaries (for supporting SendActions, a primitive from networking)
+* ReaderT with method dictionaries
 
-
-General approach: XxxMode
+General approach
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Now our code follows this pattern::
@@ -287,7 +287,7 @@ To pass constant configuration to application components, instead of
 cut the potential amount of custom classes greatly, and the configs are
 available even in class instances (such as ``Bi``).
 
-Usage of SendActions
+Method dictionaries
 ~~~~~~~~~~~~~~~~~~~~~
 
 `SendActions` is another effect which is implemented differently from everything
@@ -332,6 +332,17 @@ The moral of this story is that, perhaps, explicit dictionaries are a bad design
 because it's very easy to misuse them. A good effect system should take care of
 things like this. (But perhaps it's an overegenralization and it's only bad to unlift,
 whereas lifting is straightforward).
+
+ReaderT with method dictionaries
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Very similar to `SendActions`, we have `TxpGlobalSettings` (see `file`__). 
+`TxpGlobalSettings` is also a method dictionary, only difference is:
+
+__ https://github.com/input-output-hk/cardano-sl/blob/8dcf8e947cfe9d70c454ad24029f064b022e1830/txp/Pos/Txp/Settings/Global.hs#L51
+ 
+* `SendActions` is passed as explicit parameter to every function
+* `TxpGlobalSettings` is passed as part of context put into `ReaderT`
 
 Problem definition
 ------------------------
