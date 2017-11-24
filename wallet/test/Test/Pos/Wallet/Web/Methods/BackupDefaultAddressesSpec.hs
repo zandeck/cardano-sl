@@ -4,83 +4,66 @@ module Test.Pos.Wallet.Web.Methods.BackupDefaultAddressesSpec
 
 import           Universum
 
+import           Control.Lens (each)
 import           Data.Default (def)
+import           qualified Data.HashMap.Strict as HM
 import           Formatting ()
-import           Test.Hspec (Spec, describe)
-import           Test.Hspec.QuickCheck (modifyMaxSuccess, prop)
-import           Test.QuickCheck (Discard (..), arbitrary)
-import           Test.QuickCheck.Monadic (pick, stop)
-
-import           Pos.Client.Txp.Addresses (getFakeChangeAddress, getNewAddress)
-import           Pos.Core.Address (Address)
-import           Pos.Crypto (PassPhrase)
+import           Pos.Client.KeyStorage (addSecretKey)
 import           Pos.Crypto (emptyPassphrase, firstHardened)
 import           Pos.Launcher (HasConfigurations)
 import           Pos.Util.CompileInfo (HasCompileInfo, withCompileInfo)
-import           Pos.Wallet.Web.Account (GenSeed(..), genUniqueAccountId, genUniqueAddress)
-import           Pos.Wallet.Web.Backup (AccountMetaBackup (..), TotalBackup (..), WalletBackup (..),
-                                        WalletMetaBackup (..), getWalletBackup)
-import           Pos.Wallet.Web.ClientTypes (AccountId, CAccountInit (..),
-                                             CAccountMeta (..), CFilePath (..),
-                                             CId, CWallet, Wal, encToCId,
-                                             caId, cwamId)
-
-import           Pos.Wallet.Web.Error (WalletError(..))
-import           Pos.Wallet.Web.Methods.Logic (newAccount, newAddress)
-import           Pos.Wallet.Web.State (getWalletAddresses, getAccountWAddresses)
-import           Pos.Wallet.Web.State (AddressLookupMode(Ever), createAccount,
-                                       getAccountWAddresses, getWalletMeta,
+import           Pos.Wallet.Web.Account (GenSeed(..))
+import           Pos.Wallet.Web.Backup (AccountMetaBackup(..), WalletBackup(..),
+                                        WalletMetaBackup(..), getWalletBackup)
+import           Pos.Wallet.Web.ClientTypes (CAccountInit(..), CAccountMeta(..),
+                                             encToCId, cwAccountsNumber)
+import           Pos.Wallet.Web.Methods.Logic (createWalletSafe, newAddress,
+                                               getWallet, newAccountIncludeUnready)
+import           Pos.Wallet.Web.State (AddressLookupMode(Ever), getAccountWAddresses,
                                        getWalletAddresses)
-import           Pos.Wallet.Web.Util (decodeCTypeOrFail)
+import           Pos.Wallet.Web.Tracking.Sync (syncWalletOnImport)
 import           Pos.Wallet.Web.Util (getWalletAccountIds)
-import           Test.Pos.Util (assertProperty, expectedOne,
+import           Test.Hspec (Spec, describe)
+import           Test.Pos.Util (assertProperty, stopProperty, expectedOne,
                                 withDefConfigurations)
 import           Test.Pos.Wallet.Web.Mode (walletPropertySpec)
-import           Test.Pos.Wallet.Web.Mode (WalletProperty)
-import           Test.Pos.Wallet.Web.Util (importSingleWallet,
-                                           mostlyEmptyPassphrases)
-
--- TODO remove HasCompileInfo when MonadWalletWebMode will be splitted.
-
-type AddressGenerator = AccountId -> PassPhrase -> WalletProperty Address
 
 spec :: Spec
 spec = withCompileInfo def $
        withDefConfigurations $
-       describe "Wallet.Web.Methods.BackupDefaultAddresses" $
-       modifyMaxSuccess (const 10) $ do
-        prop "sasa" $
-           createWalletAddressFromBackupSpec commonAddressGenerator
+       describe "createAddressFromWalletBackup" $ createWalletAddressFromBackupSpec
 
-createWalletAddressFromBackupSpec :: (HasCompileInfo, HasConfigurations) => AddressGenerator -> Word32 -> WalletProperty ()
-createWalletAddressFromBackupSpec generator accSeed = do
-    let defaultAccAddrIdx = DeterminedSeed firstHardened
-    passphrase <- importSingleWallet mostlyEmptyPassphrases
+createWalletAddressFromBackupSpec :: (HasCompileInfo, HasConfigurations) => Spec
+createWalletAddressFromBackupSpec = walletPropertySpec createWalletAddressFromBackupDesc $ do
+    -- passphrase <- importSingleWallet mostlyEmptyPassphrases
     wid <- expectedOne "wallet addresses" =<< getWalletAddresses
-    accId <- lift $ decodeCTypeOrFail . caId
-         =<< newAccount (DeterminedSeed accSeed) passphrase (CAccountInit def wid)
-    ai <- newAccount (DeterminedSeed accSeed) passphrase (CAccountInit def wid)
-    let walletBackup = getWalletBackup ai
-    let wId = encToCId walletBackup
-    -- wAccIds <- getWalletAccountIds wId
-    -- wAccIds $ getAccountWAddresses Ever accId >>= \case
-	-- 			Nothing -> throwM $ InternalError "restoreWalletFromBackup: fatal: cannot find \
-	-- 											  \an existing account of newly imported wallet"
-	-- 			Just [] -> void $ newAddress defaultAccAddrIdx emptyPassphrase accId
-	-- 			Just _  -> pure ()
+    walletBackup <- lift $ getWalletBackup wid
+    let wId = encToCId (wbSecretKey walletBackup)
+    do
+        let (WalletMetaBackup wMeta) = wbMeta walletBackup
+            accList = HM.toList (wbAccounts walletBackup)
+                        & each . _2 %~ \(AccountMetaBackup am) -> am
+            defaultAccAddrIdx = DeterminedSeed firstHardened
 
-    getWallet wId
-    assertProperty (True == True) "is address created for backup wallet ?"
+        lift $ addSecretKey (wbSecretKey walletBackup)
+        if null accList
+            then do
+                let accMeta = CAccountMeta { caName = "Initial account" }
+                    accInit = CAccountInit { caInitWId = wId, caInitMeta = accMeta }
+                lift $ () <$ newAccountIncludeUnready True defaultAccAddrIdx emptyPassphrase accInit
+            else stopProperty "Accounts list should be empty"
 
-commonAddressGenerator :: HasConfigurations => AddressGenerator
-commonAddressGenerator accId passphrase = do
-    addrSeed <- pick arbitrary
-    let genAddress = genUniqueAddress (DeterminedSeed addrSeed) passphrase accId
-    -- can't catch under 'PropertyM', workarounding
-    maddr <- lift $ (Just <$> genAddress) `catch` seedBusyHandler
-    addr <- maybe (stop Discard) pure maddr
-    lift $ decodeCTypeOrFail (cwamId addr)
-  where
-    seedBusyHandler (InternalError "address generation: this index is already taken")
-                      = pure Nothing
-    seedBusyHandler e = throwM e
+        void $ lift $ createWalletSafe wId wMeta False
+        void $ lift $ syncWalletOnImport (wbSecretKey walletBackup)
+        wAccIds <- getWalletAccountIds wId
+        for_ wAccIds $ \accId -> getAccountWAddresses Ever accId >>= \case
+            Nothing -> stopProperty "Account Id list is Nothing"
+            Just [] -> lift $ newAddress defaultAccAddrIdx emptyPassphrase accId
+            Just _  -> stopProperty "Account Id list already has elements"
+        wallet <- lift $ getWallet wId
+        assertProperty ((cwAccountsNumber wallet) > 0) "are the addresses created for backup wallet ?"
+        where
+            createWalletAddressFromBackupDesc =
+                "Create wallet from backup; " <>
+                "Then create wallet accounts; " <>
+                "Finally generate addresses for wallet accounts; "
