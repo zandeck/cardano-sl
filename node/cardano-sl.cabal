@@ -502,7 +502,6 @@ executable cardano-node-simple
                      , network-transport-tcp
                      , optparse-applicative
                      , parsec
-                     , safe-exceptions
                      , serokell-util >= 0.1.3.4
                      , stm-containers
                      , time

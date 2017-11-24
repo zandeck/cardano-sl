@@ -1263,7 +1263,6 @@ self: {
             node-sketch
             optparse-applicative
             parsec
-            safe-exceptions
             serokell-util
             stm-containers
             time
