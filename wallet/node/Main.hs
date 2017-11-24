@@ -11,36 +11,36 @@ module Main
 
 import           Universum            hiding (over)
 
-import           Control.Exception.Safe (handleAny)
-import           Data.Maybe             (fromJust)
-import           Formatting             (sformat, shown, (%))
-import           Mockable               (Production, currentTime, runProduction)
-import           System.Wlog            (modifyLoggerName, logError, usingLoggerName)
+import           Data.Maybe           (fromJust)
+import           Formatting           (sformat, shown, (%))
+import           Mockable             (Production, currentTime, runProduction)
+import           System.Wlog          (modifyLoggerName)
 
-import           Pos.Binary             ()
-import           Pos.Client.CLI         (CommonNodeArgs (..))
-import qualified Pos.Client.CLI         as CLI
-import           Pos.Communication      (ActionSpec (..), OutSpecs, WorkerSpec, worker)
-import           Pos.Context            (HasNodeContext)
-import           Pos.Core               (Timestamp (..), gdStartTime, genesisData)
-import           Pos.Launcher           (HasConfigurations, NodeParams (..),
-                                         NodeResources (..), bracketNodeResources, loggerBracket,
-                                         runNode, withConfigurations)
-import           Pos.Ssc.Class          (SscParams)
-import           Pos.Ssc.GodTossing     (SscGodTossing)
-import           Pos.Util.UserSecret    (usVss)
-import           Pos.Wallet.SscType     (WalletSscType)
-import           Pos.Wallet.Web         (WalletWebMode, bracketWalletWS, bracketWalletWebDB,
-                                         getSKById, runWRealMode, syncWalletsWithGState,
-                                         walletServeWebFull, walletServerOuts)
-import           Pos.Wallet.Web.State   (cleanupAcidStatePeriodically, flushWalletStorage,
-                                         getWalletAddresses)
-import           Pos.Web                (serveWebGT)
-import           Pos.WorkMode           (WorkMode)
+import           Pos.Binary           ()
+import           Pos.Client.CLI       (CommonNodeArgs (..))
+import qualified Pos.Client.CLI       as CLI
+import           Pos.Communication    (ActionSpec (..), OutSpecs, WorkerSpec, worker)
+import           Pos.Context          (HasNodeContext)
+import           Pos.Core             (Timestamp (..), gdStartTime, genesisData)
+import           Pos.Launcher         (HasConfigurations, NodeParams (..),
+                                       NodeResources (..), bracketNodeResources, loggerBracket,
+                                       runNode, withConfigurations)
+import           Pos.Ssc.Class        (SscParams)
+import           Pos.Ssc.GodTossing   (SscGodTossing)
+import           Pos.Util             (logException)
+import           Pos.Util.UserSecret  (usVss)
+import           Pos.Wallet.SscType   (WalletSscType)
+import           Pos.Wallet.Web       (WalletWebMode, bracketWalletWS, bracketWalletWebDB,
+                                       getSKById, runWRealMode, syncWalletsWithGState,
+                                       walletServeWebFull, walletServerOuts)
+import           Pos.Wallet.Web.State (cleanupAcidStatePeriodically, flushWalletStorage,
+                                       getWalletAddresses)
+import           Pos.Web              (serveWebGT)
+import           Pos.WorkMode         (WorkMode)
 
-import           NodeOptions            (WalletArgs (..), WalletNodeArgs (..),
-                                         getWalletNodeOptions)
-import           Params                 (getNodeParams)
+import           NodeOptions          (WalletArgs (..), WalletNodeArgs (..),
+                                       getWalletNodeOptions)
+import           Params               (getNodeParams)
 
 actionWithWallet :: HasConfigurations => SscParams SscGodTossing -> NodeParams -> WalletArgs -> Production ()
 actionWithWallet sscParams nodeParams wArgs@WalletArgs {..} =
@@ -116,8 +116,8 @@ action (WalletNodeArgs (cArgs@CommonNodeArgs{..}) (wArgs@WalletArgs{..})) =
 main :: IO ()
 main = do
     args <- getWalletNodeOptions
-    let loggingParams = CLI.loggingParams "node" (wnaCommonNodeArgs args)
-    loggerBracket loggingParams . handleAny (usingLoggerName "node" . logError . show) $ do
+    let loggingParams = CLI.loggingParams "wallet" (wnaCommonNodeArgs args)
+    loggerBracket loggingParams . logException "wallet" $ do
         CLI.printFlags
         putText "[Attention] Software is built with wallet part"
         runProduction $ action args

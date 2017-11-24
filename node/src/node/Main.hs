@@ -10,28 +10,27 @@ module Main
 
 import           Universum
 
-import           Control.Exception.Safe (handleAny)
-import           Data.Maybe             (fromJust)
-import           Formatting             (sformat, shown, (%))
-import           Mockable               (Production, currentTime, runProduction)
-import           System.Wlog            (logError, usingLoggerName)
+import           Data.Maybe          (fromJust)
+import           Formatting          (sformat, shown, (%))
+import           Mockable            (Production, currentTime, runProduction)
 
-import           Pos.Binary             ()
-import           Pos.Client.CLI         (CommonNodeArgs (..), NodeArgs (..),
-                                         SimpleNodeArgs (..))
-import qualified Pos.Client.CLI         as CLI
-import           Pos.Communication      (OutSpecs, WorkerSpec)
-import           Pos.Core               (GenesisData (..), Timestamp (..), genesisData,
-                                         getSharedSeed)
-import           Pos.Launcher           (HasConfigurations, NodeParams (..), loggerBracket,
-                                         runNodeReal, withConfigurations)
-import           Pos.Ssc.Class          (SscConstraint, SscParams)
-import           Pos.Ssc.GodTossing     (SscGodTossing)
-import           Pos.Ssc.NistBeacon     (SscNistBeacon)
-import           Pos.Ssc.SscAlgo        (SscAlgo (..))
-import           Pos.Update             (updateTriggerWorker)
-import           Pos.Util.UserSecret    (usVss)
-import           Pos.WorkMode           (RealMode)
+import           Pos.Binary          ()
+import           Pos.Client.CLI      (CommonNodeArgs (..), NodeArgs (..),
+                                      SimpleNodeArgs (..))
+import qualified Pos.Client.CLI      as CLI
+import           Pos.Communication   (OutSpecs, WorkerSpec)
+import           Pos.Core            (GenesisData (..), Timestamp (..), genesisData,
+                                      getSharedSeed)
+import           Pos.Launcher        (HasConfigurations, NodeParams (..), loggerBracket,
+                                      runNodeReal, withConfigurations)
+import           Pos.Ssc.Class       (SscConstraint, SscParams)
+import           Pos.Ssc.GodTossing  (SscGodTossing)
+import           Pos.Ssc.NistBeacon  (SscNistBeacon)
+import           Pos.Ssc.SscAlgo     (SscAlgo (..))
+import           Pos.Update          (updateTriggerWorker)
+import           Pos.Util            (logException)
+import           Pos.Util.UserSecret (usVss)
+import           Pos.WorkMode        (RealMode)
 
 actionWithoutWallet
     :: forall ssc.
@@ -75,7 +74,7 @@ main :: IO ()
 main = do
     args@(CLI.SimpleNodeArgs commonNodeArgs _) <- CLI.getSimpleNodeOptions
     let loggingParams = CLI.loggingParams "node" commonNodeArgs
-    loggerBracket loggingParams . handleAny (usingLoggerName "node" . logError . show) $ do
+    loggerBracket loggingParams . logException "node" $ do
         CLI.printFlags
         let conf = CLI.configurationOptions (CLI.commonArgs commonNodeArgs)
         runProduction $ withConfigurations conf (action args)
