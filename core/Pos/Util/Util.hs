@@ -139,6 +139,7 @@ import           Mockable                       (ChannelT, Counter, Distribution
                                                  ThreadId)
 import qualified Prelude
 import           Serokell.Data.Memory.Units     (Byte, fromBytes, toBytes)
+import           Serokell.Util.Exceptions       ()
 import qualified System.Console.ANSI            as ANSI
 import           System.Directory               (canonicalizePath, createDirectory,
                                                  doesDirectoryExist,
@@ -634,4 +635,4 @@ logException :: LoggerName -> IO a -> IO a
 logException name = E.handle (\e -> handler e >> E.throw e)
   where
     handler :: E.SomeException -> IO ()
-    handler = usingLoggerName name . logError . show
+    handler = usingLoggerName name . logError . pretty
