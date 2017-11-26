@@ -591,21 +591,27 @@ to this file already.
 
 **TODO**
 
-### Node configuration
+### Block configuration
 
-Node configuration is accessible by `<configuration-key>.node` key. It
-has the following values:
+Block configuration is stored under the `<configuration-key>.block` key.
+It contains the following values:
 
 * `networkDiameter` (seconds) — how much time it takes to propagate a
   block across the network. In practice this value determines when
   slot leaders create a block (it's done `networkDiameter` seconds
   before the end of the slot).
+* `recoveryHeadersMessage` — how many headers will be sent in a
+  batch. This value should be greater than `k`.
+
+### Node configuration
+
+Node configuration is accessible via the `<configuration-key>.node` key. It
+has the following values:
+
 * `mdNoBlocksSlotThreshold` — number of slots after which node will
   actively requests blocks if it doesn't receive any blocks without
   requesting them (in normal cases blocks are announced). Should be
   less than `2 · k`.
-* `recoveryHeadersMessage` — how many headers will be sent in a
-  batch. This value should be greater than `k`.
 
 **TODO**: describe the rest.
 
