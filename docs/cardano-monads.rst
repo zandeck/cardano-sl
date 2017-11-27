@@ -386,8 +386,69 @@ might be not at all what a programmer would expect.
 
 The moral of this story is that, perhaps, explicit dictionaries are a bad design
 because it's very easy to misuse them. A good effect system should take care of
-things like this. (But perhaps it's an overegenralization and it's only bad to unlift,
+things like this. (But perhaps it's an over-genralization and it's only bad to unlift,
 whereas lifting is straightforward).
+
+Usage of Effect Context Sums
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Rather than using a method dictionary, in order to avoid lifting/unlifting
+altogether, we use effect context sums. For example, consider the following
+hypothetical method dictionary:
+
+```
+data MonadDbGet m = MonadDbGet
+  { dbGet :: DBTag -> ByteString -> m (Maybe ByteString)
+  }
+```
+
+There are two implementations for it:
+
+```
+dbGetRocks :: MonadRealDB ctx m => DBTag -> ByteString -> m (Maybe ByteString)
+dbGetRocks tag key = getDBByTag tag >>= rocksGetBytes key
+
+dbGetPure :: MonadPureDB ctx m => DBTag -> ByteString -> m (Maybe ByteString)
+dbGetPure (tagToLens -> l) key =
+    view (l . at key) <$> (view (lensOf @DBPureVar) >>= readIORef)
+```
+
+In case of ``dbGetRocks``, the necessary context for this operation is having
+``NodeDBs`` (implied by ``MonadRealDB``). In case of ``dbGetPure``, the
+necessary context is having ``DBPureVar``.
+
+Rather than put ``MonadDbGet`` effect dictionary into the ``ReaderT`` environment, we
+construct a sum of all possible context values:
+
+```
+data DBSum = RealDB NodeDBs | PureDB DBPureVar
+```
+
+This sum is used to implement a method that can use either one of the
+implementations:
+
+```
+eitherDB
+    :: (MonadReader ctx m, HasLens DBSum ctx DBSum)
+    => ReaderT NodeDBs m a -> ReaderT DBPureVar m a -> m a
+eitherDB ract pact = view (lensOf @DBSum) >>= \case
+    RealDB dbs -> runReaderT ract dbs
+    PureDB pdb -> runReaderT pact pdb
+
+dbGetSum
+    :: MonadDBSum ctx m
+    => DBTag -> ByteString -> m (Maybe ByteString)
+dbGetSum tag key =
+    eitherDB (dbGetRocks tag key) (dbGetPure tag key)
+```
+
+There are two issues with this approach:
+
+* it requires us to know up front about all of the available implementations,
+  severely limiting extensibility
+
+* when we need to assume a certain implementation, we have to fail at runtime,
+  because the implementation is not reflected in types
 
 ReaderT with Method Dictionaries
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
