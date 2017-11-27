@@ -94,6 +94,11 @@ library
 
                         -- Client CLI
                         Pos.Client.CLI
+                        Pos.Client.CLI.NodeOptions
+                        Pos.Client.CLI.Options
+                        Pos.Client.CLI.Params
+                        Pos.Client.CLI.Secrets
+                        Pos.Client.CLI.Util
 
                         -- Utilities/helpers
                         Pos.Util.Config
@@ -146,13 +151,6 @@ library
                         Pos.Block.Slog.Logic
                         Pos.Block.Slog.Types
                         Pos.Block.Worker
-
-                        -- Client
-                        Pos.Client.CLI.NodeOptions
-                        Pos.Client.CLI.Options
-                        Pos.Client.CLI.Params
-                        Pos.Client.CLI.Secrets
-                        Pos.Client.CLI.Util
 
                         -- NodeContext
                         Pos.Context.Context
