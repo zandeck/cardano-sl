@@ -23,14 +23,14 @@ so ubiqutous. This means that it's impossible to quickly try each possible
 approach, one must rewrite half the application to do so.
 
 History
-----------
+-------
 
 In Cardano SL we've used multiple approaches to effects, none of them
 satisfactory. The goal of this document is to provide a reference point for
 discussion about further direction of travel.
 
-The Stone Age
-~~~~~~~~~~~~~~
+MTL-style Transformers and Classes
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The first approach to effects that was used in Cardano SL was simple: for each
 effect, create a class with operations and a monad transformer that implements
@@ -96,12 +96,12 @@ Cons:
   but then we lose extensibility, so it's still an issue).
 
 * Cost of introducing new effects. For ``N`` transformers and ``M`` classes,
-  there must be ``N * M - k`` instances (where ``k`` is the amount of impossible
-  effect combinations: one does not simply use ``WriterT`` with ``ContT``). The
-  more effects we have in the application, the more costly it is to add one more
-  (at 10 effects we already hit 100 instances, the cost is insurmountable). Not
-  only this is boilerplate-heavy, it's also antimodular, as every effect needs
-  to know about each other.
+  there must be ``N * M - k`` instances (where ``k`` is the amount of unneeded
+  or impossible effect combinations: one does not simply use ``WriterT`` with
+  ``ContT``). The more effects we have in the application, the more costly it is
+  to add one more (at 10 effects we already hit 100 instances, the cost is
+  insurmountable). Not only this is boilerplate-heavy, it's also antimodular, as
+  every effect needs to know about each other.
 
 Conclusion:
 
@@ -112,8 +112,8 @@ Conclusion:
   might be unsatisfactory. (Slowdown is linear in the amount of layers).
 
 
-The Bronze Age
-~~~~~~~~~~~~~~~
+Using Ether
+~~~~~~~~~~~
 
 The core observation is that many domain-specific effects are isomorphic to
 general purpose ones. The majority of monad transformers in Cardano SL were
@@ -178,17 +178,17 @@ Conclusion:
   run-time configuability was quite inconvenient, and bad compile-time
   performance marked this approach a no-go.
 
-The Modern Era
----------------
+Current Situation
+-----------------
 
-After we've realized what led to bad compile-time performance, @int-index came up with an
-idea of ``ExecMode``. Basically, we continued to use classes from ``Ether``, but
-rather than having numerous ``IdentityT`` layers there was a single ``newtype``
-wrapper around ``ReaderT ModeEnv Production`` at the bottom. This solved the
-compile-time performance issue completely at the cost of a moderate increase in
-boilerplate.
+After we've realized what led to bad compile-time performance, @int-index came
+up with an idea of ``ExecMode``. Basically, we continued to use classes from
+``Ether``, but rather than having numerous ``IdentityT`` layers there was a
+single ``newtype`` wrapper around ``ReaderT ModeEnv Production`` at the bottom.
+This solved the compile-time performance issue completely at the cost of a
+moderate increase in boilerplate.
 
-However, FPComplete began to see ``ether`` as an Enemy of The State, and asked
+However, FPComplete began to see ``ether`` as a suboptimal solution, and asked
 us to purge its remains. Now we were supposed to remove all our custom classes,
 replacing them with method records. Those records would go into a ``ReaderT``
 and be passed everywhere manually (as opposed to instance search). Instead of
@@ -202,16 +202,16 @@ of our custom classes yet. Just to clarify: in this section we'll discuss the
 current transitional state, and it's more painful than what was actually
 proposed by FPComplete.
 
+In other words, there is a compliсation that actually we have several approaches
+combined:
 
-Also, there is compliсation, that we actually have three aproaches combined:
-	
-* General approach a la ExecMode(s)
-* Usage of reflection (which is in fact custom case for ReaderT for constant data within single execution)
+* General approach a la ExecMode
+* Reflection-based constants (used instead of MonadReader for constant data within single execution)
 * Method dictionaries (for supporting SendActions, a primitive from networking)
 * ReaderT with method dictionaries
 
-General approach
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
+General Approach
+~~~~~~~~~~~~~~~~
 
 Now our code follows this pattern::
 
@@ -277,8 +277,8 @@ Conclusion:
 * Current solution requires huge swaths of boilerplate code, it's hard to
   reason about the code, and it's inflexible. We must seek other options.
 
-Usage of reflection
-~~~~~~~~~~~~~~~~~~~~
+Usage of ``reflection``
+~~~~~~~~~~~~~~~~~~~~~~~
 
 To pass constant configuration to application components, instead of
 ``ReaderT`` we use ``reflection``. More specifically, we use the dumb and unsafe
@@ -287,35 +287,34 @@ To pass constant configuration to application components, instead of
 cut the potential amount of custom classes greatly, and the configs are
 available even in class instances (such as ``Bi``).
 
-Method dictionaries
-~~~~~~~~~~~~~~~~~~~~~
+Method Dictionaries
+~~~~~~~~~~~~~~~~~~~
 
-`SendActions` is another effect which is implemented differently from everything
+``SendActions`` is another effect which is implemented differently from everything
 else in our system. It's an explicitly passed method dictionary that has the
-monad `m` as a type parameter. Unlike classes, explicit dictionaries must be passed
+monad ``m`` as a type parameter. Unlike classes, explicit dictionaries must be passed
 manually (not by compiler via instance search), which might be both an advantage
 and a disadvantage.
 
-`SendActions` is a perfect example of a *local* effect: in general, we don't
+``SendActions`` is a perfect example of a *local* effect: in general, we don't
 have the ability to send requests, but we get this ability when we start a so
 called conversation. Doing a local effect via an explicit dictionary is a
 testament to poor support for local effects of our current approach with modes.
 
-One of the problems with `SendActions` is its use of natural transformations. We
-have a helper `hoistSendActions`, and right now we horribly misuse it. Since
+One of the problems with ``SendActions`` is its use of natural transformations. We
+have a helper ``hoistSendActions``, and right now we horribly misuse it. Since
 ``m`` in ``SendActions m`` is in an invariant position, we need
-`hoistSendActions` to convert ``SendActions n`` to ``SendActions m``, and it
+``hoistSendActions`` to convert ``SendActions n`` to ``SendActions m``, and it
 requires two natural transformations: ``n ~> m`` and ``m ~> n``.
 
-First,
-providing these transformations is an inconvenience (first one tends to be a
-mere lift, but the second one must do certain tricks to unlift). Second, it
-introduces a potential for horrible, subtle bugs. As was said, right now we misuse
-this helper, in particular because we call it in a runner, `runRealMode`;
-therefore, the unlift natural transformation must reconstruct the monadic
-context from what it has at transformer stack initialization site, not at
-conversation fork site; therefore, any local modifications to the monad
-transformer stack are *not* reflected in forked conversations (such as `ReaderT`
+First, providing these natural transformations is an inconvenience (the ``n ~> m`` one
+tends to be a mere lift, but the second one must do certain tricks to unlift).
+Second, it introduces a potential for horrible, subtle bugs. As was said, right
+now we misuse this helper, in particular because we call it in a runner,
+``runRealMode``; therefore, the unlift natural transformation must reconstruct the
+monadic context from what it has at transformer stack initialization site, not
+at conversation fork site; therefore, any local modifications to the monad
+transformer stack are *not* reflected in forked conversations (such as ``ReaderT``
 local).
 
 To put it into concrete terms, here is a code demonstration::
@@ -324,8 +323,8 @@ To put it into concrete terms, here is a code demonstration::
     local f $ enqueueMsg msg $ \_ _ -> (:|[]) $ do
       y <- ask
 
-What do you think, is `y` equal to `x` or `f x`? The way we currently use
-`hoistSendActions`, it will be equal to `x` (completely oblivious to `f`). This
+What do you think, is ``y`` equal to ``x`` or ``f x``? The way we currently use
+``hoistSendActions``, it will be equal to ``x`` (completely oblivious to ``f``). This
 might be not at all what a programmer would expect.
 
 The moral of this story is that, perhaps, explicit dictionaries are a bad design
@@ -333,19 +332,19 @@ because it's very easy to misuse them. A good effect system should take care of
 things like this. (But perhaps it's an overegenralization and it's only bad to unlift,
 whereas lifting is straightforward).
 
-ReaderT with method dictionaries
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ReaderT with Method Dictionaries
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Very similar to `SendActions`, we have `TxpGlobalSettings` (see `file`__). 
-`TxpGlobalSettings` is also a method dictionary, only difference is:
+Very similar to ``SendActions``, we have ``TxpGlobalSettings`` (see `file`__).
+``TxpGlobalSettings`` is also a method dictionary, only difference is:
 
 __ https://github.com/input-output-hk/cardano-sl/blob/8dcf8e947cfe9d70c454ad24029f064b022e1830/txp/Pos/Txp/Settings/Global.hs#L51
- 
-* `SendActions` is passed as explicit parameter to every function
-* `TxpGlobalSettings` is passed as part of context put into `ReaderT`
 
-Problem definition
-------------------------
+* ``SendActions`` is passed as explicit parameter to every function
+* ``TxpGlobalSettings`` is passed as part of context put into ``ReaderT``
+
+Problem Definition
+------------------
 
 Informed by previous failures, we are in a position to finally find a good
 approach to monadic effects in our code. Ideally, with all of the pros and
@@ -383,85 +382,109 @@ The ReaderT Pattern
 
 Read the full article: https://www.fpcomplete.com/blog/2017/06/readert-design-pattern
 
-The general sentiment of the article is to have a single `Env` data type
-(basically, what we have with our modes), and use `ReaderT Env IO` exclusively.
+The general sentiment of the article is to have a single ``Env`` data type
+(basically, what we have with our modes), and use ``ReaderT Env IO`` exclusively.
 
-The general sentiment is true: `StateT`, `WriterT`, and `ExceptT` are almost
-never what you actually want. `StateT` kills the story for concurrency and makes
-it harder to deal with exceptions, `WriterT` is simply broken performance-wise
-(and its CPS-ed version is `StateT` with the same caveats), and `ExceptT` adds
+The general sentiment is true: ``StateT``, ``WriterT``, and ``ExceptT`` are almost
+never what you actually want. ``StateT`` kills the story for concurrency and makes
+it harder to deal with exceptions, ``WriterT`` is simply broken performance-wise
+(and its CPS-ed version is ``StateT`` with the same caveats), and ``ExceptT`` adds
 one more way to throw exceptions (so you need one more way to catch them).
 
-For pure code (without `IO` or `MonadIO`), use `StateT`, `WriterT`, and
-`ExceptT`. In other cases, avoid them.
+For pure code (without ``IO`` or ``MonadIO``), use ``StateT``, ``WriterT``, and
+``ExceptT``. In other cases, avoid them.
 
-This aspect of the `ReaderT` pattern makes a lot of sense. Monad transformers
-are used to model effects in pure code, and in `IO` you don't have a choice but
+This aspect of the ``ReaderT`` pattern makes a lot of sense. Monad transformers
+are used to model effects in pure code, and in ``IO`` you don't have a choice but
 to have the actual effects themselves (there's mutable state, there are
 exceptions). Mixing them is unhelpful.
 
-Now, let's consider the global `Env` type. The issue with it is associated
-boilerplate of `Has` classes. In case we want to extend the environment to
+Now, let's consider the global ``Env`` type. The issue with it is associated
+boilerplate of ``Has`` classes. In case we want to extend the environment to
 introduce local effects, there's a high cost in boilerplate. This can be already
 observed in our codebase.
 
 Point-by-point rundown:
 
 * Flexibility: LOW. Extension of environment requires declaring a new type,
-  writing `Has` instances for it, and potentially monad instances (although the
-  approach recommends avoiding monad classes in favor of `Has` classes, not
+  writing ``Has`` instances for it, and potentially monad instances (although the
+  approach recommends avoiding monad classes in favor of ``Has`` classes, not
   everything is under our control and there are classes by external libraries).
   There's no way to partially run effects -- one needs to supply the entire
-  `ReaderT` environment up front.
+  ``ReaderT`` environment up front.
 
 * Extensibility: MODERATE. Defining new effects boils down to declaring a method
-  record and a `Has` class for it. Then, for each field in the method record we
-  must define a function that extracts this method using the `Has` class and
+  record and a ``Has`` class for it. Then, for each field in the method record we
+  must define a function that extracts this method using the ``Has`` class and
   runs it. Boilerplate-heavy, yes, but at least effects don't need to know about
   each other.
 
 * Ease of use: MODERATE. Beginners can quickly grasp the basic concepts, but
   there are pitfalls when it comes to lifting method records (see section on
-  `SendActions`).
+  ``SendActions``).
 
 * Compile-time performance: SUPERB. There's nothing to it, GHC can easily handle
   this style of code.
 
-* Run-time performance: MODERATE. A flat `ReaderT` layer is good, but method
+* Run-time performance: MODERATE. A flat ``ReaderT`` layer is good, but method
   records are stored within the context (rather than passed via instance
   search). Because of this, the compiler can't assume that the method record is
-  coherent (it's not, you can modify it with `local`), and it limits inlining.
+  coherent (it's not, you can modify it with ``local``), and it limits inlining.
   Instance specialization can't be performed because there are no instances to
   speak of.
 
 * Run-time configurability: SUPERB. You can put just about anything into these
   manually defined method records, modify them at will, etc. However, we need to
   figure out a good story for method records that depend on other method
-  records, because it's the same pitfall as with `SendActions`: how can we
-  ensure that if we change the something (say, a logging method) with `local`,
+  records, because it's the same pitfall as with ``SendActions``: how can we
+  ensure that if we change the something (say, a logging method) with ``local``,
   other method records that use logging will be updated accordingly?
 
-* Predictability: LOW/HIGH. Depends on whether we have a `newtype` over
-  `ReaderT`.
+* Predictability: LOW/HIGH. Depends on whether we have a ``newtype`` over
+  ``ReaderT``.
 
 Verdict: the approach is viable but has its costs.
 
 
-Dictionary-passing style
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Dictionary-Passing Style
+~~~~~~~~~~~~~~~~~~~~~~~~
 
-Very similar to previous approach and one was widely used by Networking team.
+Similar to previous approach and one was widely used by the networking team.
 
 As we understand ideas behind it:
 
 - Single base monad
 
-  - Similarly to `ReaderT IO` approach
+  - Similarly to ``ReaderT IO`` approach
 
 - Differentiating implementations all stored in records
 
-  - No type classes and instances like `instance MyClass (ReaderT Ctx IO)`
-  - Each function accepts a single **explicit** parameter of type `Ctx m`
-  - This type `Ctx` contains all needed methods
+  - No type classes and instances like ``instance MyClass (ReaderT Ctx IO)``
+  - Each function accepts a single **explicit** parameter of type ``Ctx m``
+  - This type ``Ctx`` contains all needed methods
 
-*TODO* analyze by criterias
+Point-by-point rundown:
+
+* Flexibility: LOW. (Same as above).
+
+* Extensibility: GOOD. (Same as above, minus a bit of boilerplate helpers).
+
+* Ease of use: LOW. (Same as above, plus one needs to manually pass a the
+  context everywhere).
+
+* Compile-time performance: SUPERB. (Same as above).
+
+* Run-time performance: MODERATE. (Same as above).
+
+* Run-time configurability: SUPERB. (Same as above)
+
+* Predictability: HIGH. Checking what implementation is used is easy as tracing
+  the provenance of the input context.
+
+Compared to the ``ReaderT``-based approach, explicit dictionary passing trades
+ease of use for simpler types (not a single monad transformer), less boilerplate at
+effect definition site (no need for helpers that ``ask`` and run a method, as
+it's done at use site), and better predictability.
+
+Verdict: preferable to `ReaderT` as long as we can put up with reduced
+convenience.
