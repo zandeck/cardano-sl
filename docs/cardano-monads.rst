@@ -206,6 +206,7 @@ In other words, there is a compliсation that actually we have several approache
 combined:
 
 * General approach a la ExecMode
+* Mockable-based constraints
 * Reflection-based constants (used instead of MonadReader for constant data within single execution)
 * Method dictionaries (for supporting SendActions, a primitive from networking)
 * ReaderT with method dictionaries
@@ -286,6 +287,62 @@ To pass constant configuration to application components, instead of
 ``Reifies``-style reflection. It turned out to be a great design choice: we've
 cut the potential amount of custom classes greatly, and the configs are
 available even in class instances (such as ``Bi``).
+
+Usage of ``Mockable``
+~~~~~~~~~~~~~~~~~~~~~
+
+Certain properties of the base monad are expressed using ``Mockable`` from
+``time-warp-nt`` rather than custom classes.
+
+The ``Mockable`` class is defined like so:
+
+```
+class Monad m => Mockable d m where
+    liftMockable :: d m t -> m t
+```
+
+And here is an example of ``d``:
+
+```
+data Async m t where
+    Async :: m t -> Async m (Promise m t)
+    WithAsync :: m t -> (Promise m t -> m r) -> Async m r
+    Wait :: Promise m t -> Async m t
+    WaitAny :: [Promise m t] -> Async m (Promise m t, t)
+    CancelWith :: Exception e => Promise m t -> e -> Async m ()
+    AsyncThreadId :: Promise m t -> Async m (ThreadId m)
+    Race :: m t -> m r -> Async m (Either t r)
+    Link :: Promise m t -> Async m ()
+```
+
+Basically, having ``Mockable Async`` is nearly the same as having a custom class
+``MonadAsync``, but there are some differences.
+
+There's an increase in boilerplate at effect definition site, as one needs to
+define helper methods for each ``Mockable`` method:
+
+```
+{-# INLINE async #-}
+async :: ( Mockable Async m ) => m t -> m (Promise m t)
+async m = liftMockable $ Async m
+
+{-# INLINE withAsync #-}
+withAsync :: ( Mockable Async m ) => m t -> (Promise m t -> m r) -> m r
+withAsync mterm k = liftMockable $ WithAsync mterm k
+
+{-# INLINE wait #-}
+wait :: ( Mockable Async m ) => Promise m t -> m t
+wait promise = liftMockable $ Wait promise
+
+...
+```
+
+This increase is linear in the amount of supported methods.
+
+On the other hand, there's a decrease in the amount of boilerplate (linear in
+the amount of transformers), as each transformer needs to define
+``liftMockable`` just once.
+
 
 Method Dictionaries
 ~~~~~~~~~~~~~~~~~~~
